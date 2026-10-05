@@ -1,14 +1,14 @@
 import torch
 from PIL import Image
 from torchvision import transforms
-from model import CropDiseaseCNN
+from model import CropDiseaseModel
 
 def predict():
     # 1. Label Mapping
     classes = ['Healthy', 'Diseased']
 
     # 2. Load Model & Weights
-    model = CropDiseaseCNN(num_classes=2)
+    model = CropDiseaseModel(num_classes=2)
     model.load_state_dict(torch.load("crop_disease_model.pth"))
     model.eval()
 
