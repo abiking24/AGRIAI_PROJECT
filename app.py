@@ -1,91 +1,164 @@
-from pathlib import Path
-
-import streamlit as st
 from PIL import Image
+import streamlit as st
+from transformers import pipeline
 
-from src.predictor import DiseasePredictor
-from src.disease_info import DISEASE_INFO
+# የሞዴል ስም (በቲማቲም ቅጠል በሽታዎች ላይ የሰለጠነ ResNet50 ሞዴል)
+MODEL_NAME = "wellCh4n/tomato-leaf-disease-classification-resnet50"
+MIN_CONFIDENCE = 60.0  # ከዚህ በታች ከሆነ ማስጠንቀቂያ ያሳያል
 
+# ገጽ ማዋቀር
+st.set_page_config(page_title="AgriAI - የሰብል በሽታ ምርመራ", page_icon="🍅")
 
-st.set_page_config(page_title="AgriAI - Crop Disease Detection", layout="centered")
-
-
-@st.cache_resource
-def load_predictor(checkpoint_mtime):
-    return DiseasePredictor(
-        model_path=Path(__file__).resolve().parent / "crop_disease_model.pth"
-    )
-
-
-st.title("AgriAI: የሰብል በሽታ መለያ")
-st.write("የሰብሉን ፎቶ ያስገቡ እና የሞዴሉን ግምት ከአጠቃላይ መረጃ ጋር ይመልከቱ።")
-
-checkpoint_path = Path(__file__).resolve().parent / "crop_disease_model.pth"
-checkpoint_mtime = (
-    checkpoint_path.stat().st_mtime_ns if checkpoint_path.is_file() else None
-)
-predictor = load_predictor(checkpoint_mtime)
-if not predictor.is_ready:
-    st.warning(predictor.status_message)
-    st.stop()
-
-uploaded_file = st.file_uploader(
-    "የሰብል ፎቶ እዚህ ይስቀሉ...",
-    type=["jpg", "jpeg", "png"],
+st.title("🍅 AgriAI: የቲማቲም በሽታ ምርመራ እና መፍትሄ መድረክ")
+st.caption(
+    "የቲማቲም ቅጠል ፎቶ በመጫን ወይም በካሜራ በማንሳት በሽታውን ይለዩ እና የአማርኛ መፍትሄዎችን"
+    " ያግኙ።"
 )
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="የተሰቀለው ፎቶ", use_container_width=True)
 
-    if st.button("በሽታውን መርምር"):
-        result, status = predictor.predict(image)
-        if status != "Success":
-            st.warning(status)
-        elif result not in DISEASE_INFO:
-            st.error("ስህተት ተፈጥሯል፤ እባክዎ እንደገና ይሞክሩ።")
-        else:
-            info = DISEASE_INFO[result]
-            with st.container():
-                # Main prediction summary
-                if result == "healthy":
-                    st.success(f"የሰብሉ ሁኔታ፦ {info['disease_name']}")
-                else:
-                    st.error(f"የተገኘው ሁኔታ፦ {info['disease_name']}")
+# ሞዴሉን በመጫን ላይ (Memorization እንዳይፈጠር በ cache ይያዛል)
+@st.cache_resource(show_spinner="AI ሞዴል በመጫን ላይ... እባክዎ ይጠብቁ...")
+def load_model():
+  return pipeline("image-classification", model=MODEL_NAME)
 
-                st.markdown("**ምክንያት / ማስታወሻ**")
-                st.write(info["cause"])
 
-                st.markdown("**የሚመከሩ እርምጃዎች**")
-                st.markdown("\n".join(f"- {remedy}" for remedy in info.get("remedies", [])))
+try:
+  clf = load_model()
+except Exception as e:
+  st.error(f"ሞዴሉን በመጫን ላይ ስህተት ተፈጥሯል: {e}")
+  st.stop()
 
-                st.caption(info.get("limitation", ""))
+# የበሽታዎች የአማርኛ ትርጉም እና የመፍትሄ/መከላከያ ምክር መዝገብ (Dictionary)
+DISEASE_ADVICE_AMHARIC = {
+    "Tomato Early blight": {
+        "name": "የቀድሞ ጥቁር ነጠብጣብ በሽታ (Early Blight)",
+        "description": (
+            "በፈንገስ የሚመጣ ሲሆን፣ በቅጠሎች ላይ ቡናማ እስከ ጥቁር ክብ ቅርጽ ያላቸው ነጠብጣቦችን"
+            " ይፈጥራ፤ ከታች ባሉት ቅጠሎች ላይ በብዛት ይጀምራል።"
+        ),
+        "treatment": (
+            "1. የተጠቃቁ ዎችን ቅጠሎች ወዲያውኑ ሰብስቦ ማቃጠል ወይም መቀበር።\n2. ለፈንገስ የሚሆን"
+            " ተስማሚ ፀረ-ፈንገስ (Fungicide) መድኃኒት በባለሙያ ድጋፍ መርጨት።"
+        ),
+        "prevention": (
+            "1. የሰብል ማሽከርከር (Crop rotation) መጠቀም።\n2. ተክሎችን በበቂ ርቀት መትከል"
+            " እና አየር እንዲያገኙ ማድረግ።\n3. ውሃ ሲያጠጡ ቅጠሉ ላይ ሳይሆን ከስር (ከመሬት"
+            " ጋር) ማጠጣት።"
+        ),
+    },
+    "Tomato Late blight": {
+        "name": "የዘገየ የፈንገስ በሽታ (Late Blight)",
+        "description": (
+            "በጣም አጥፊ ፈንገስ ሲሆን፣ በቅጠሎች እና ግንዶች ላይ የውሃ የረጠበባቸው የሚመስሉ ግራጫማ"
+            " ወይም ጥቁር መልክ ያላቸው ቦታዎችን ይፈጥራል።"
+        ),
+        "treatment": (
+            "1. በሽታው የታየባቸውን እፅዋት ወዲያውኑ አስወግዶ ማጥፋት (ሌሎች ላይ እንዳይዛመት)።\n2."
+            " ፈጣን እርምጃ የሚወስዱ የተፈቀዱ ፀረ-ፈንገስ መድኃኒቶችን መጠቀም።"
+        ),
+        "prevention": (
+            "1. በሽታን የሚቋቋሙ የቲማቲም ዝርያዎችን መጠቀም።\n2. እርጥበትን መቀነስ እና አየር"
+            " ዝውውር እንዲኖር ማድረግ።"
+        ),
+    },
+    "Tomato healthy": {
+        "name": "ጤናማ ሰብል (Healthy)",
+        "description": "የተመረመረው የቲማቲም ቅጠል ሙሉ በሙሉ ጤናማ ነው ምንም አይነት የበሽታ ምልክት የለውም።",
+        "treatment": "ምንም ዓይነት ሕክምና አያስፈልገውም።",
+        "prevention": (
+            "1. አዘውትሮ መከታተል።\n2. ተስማሚ የሆነ ማዳበሪያ እና ውሃ አሰጣጥ ስርዓት"
+            " መጠበቅ።"
+        ),
+    },
+    "Leaf Mold": {
+        "name": "የቅጠል ፈንገስ (Leaf Mold)",
+        "description": (
+            "በቅጠል ላይ ከላይ ቢጫማ ወይም π-ቅርጽ ያላቸው ትናንሽ ቦታዎች ሲኖሩ ከታችኛው ክፍል ደግሞ"
+            " የβεልቬት (Velvet) መሰል ግራጫማ ሹርባ ይኖረዋል።"
+        ),
+        "treatment": (
+            "1. የግሪንሃውስ (Greenhouse) ከሆነ አየር እንዲገባ ማድረግ።\n2. እርጥበትን"
+            " መቀነስ።"
+        ),
+        "prevention": "እርጥበትን መቆጣጠር እና የሰብል ዝውውር ማድረግ።",
+    },
+}
 
-                # If a generic "diseased" result, offer common tomato-disease advice in Amharic
-                tomato_dict = DISEASE_INFO.get("tomato_common", {})
-                if result == "diseased" and tomato_dict:
-                    with st.expander("ተጨማሪ የቲማቲም ምክር (አማርኛ)"):
-                        # build options excluding the note key
-                        options = [k for k in tomato_dict.keys() if k != "note"]
-                        if options:
-                            choice = st.selectbox("እባኮትን ከዚህ ውስጥ አንዱን ይምረጡ:", options)
-                            chosen = tomato_dict.get(choice, {})
+# የፎቶ ምንጭ መረጫ
+source = st.radio(
+    "ፎቶ የሚጫኑበትን መንገድ ይምረጡ:", ["ፋይል ጫን (Upload)", "ካሜራ ተጠቀም"], horizontal=True
+)
 
-                            st.subheader(chosen.get("amharic_name", choice))
-                            st.markdown("**ምክንያት**")
-                            st.write(chosen.get("cause", "-") )
+file = None
+if source == "ፋይል ጫን (Upload)":
+  file = st.file_uploader(
+      "የቲማቲም ቅጠል ፎቶ ይምረጡ (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"]
+  )
+else:
+  file = st.camera_input("የቅጠል ፎቶ ያንሱ")
 
-                            if chosen.get("remedies"):
-                                st.markdown("**ሕክምና / የሚመከሩ እርምጃዎች**")
-                                st.markdown("\n".join(f"- {r}" for r in chosen["remedies"]))
+if file is not None:
+  img = Image.open(file).convert("RGB")
+  st.image(img, caption="የተጫነው ፎቶ", use_container_width=True)
 
-                            if chosen.get("prevention"):
-                                st.markdown("**መከላከያ (Prevention)**")
-                                st.markdown("\n".join(f"- {p}" for p in chosen["prevention"]))
+  with st.spinner("AI ፎቶውን በመመርመር ላይ ነው..."):
+    results = clf(img, top_k=3)
+    best = results[0]
+    raw_label = best["label"]
+    conf = best["score"] * 100
 
-                            # global note/disclaimer
-                            note = tomato_dict.get("note")
-                            if note:
-                                st.info(note)
-                        else:
-                            st.write("ከተዘርዘሩ የቲማቲም በሽታዎች መረጃ ለማቅረብ አልተገኘም።")
+    # ውጤቱን ማሳየት
+    st.markdown("---")
+    st.subheader("📊 የምርመራ ውጤት")
+
+    # የጥንቃቄ ገደብ ማረጋገጫ (Confidence Threshold)
+    if conf < MIN_CONFIDENCE:
+      st.warning(
+          f"⚠️ የእርግጠኛነት መጠኑ ዝቅተኛ ነው ({conf:.1f}%). ፎቶው ግልጽ"
+          " አለመሆኑን፣ ወይም ቅጠል ብቻ የሌለበት መሆኑን ያረጋግጡ። እባክዎ የተሻለ እና ግልጽ"
+          " የቅጠል ፎቶ እንደገና ያስገቡ።"
+      )
+    else:
+      # ከተቻለ የአማርኛ መግለጫ ማምጣት፣ ካልሆነ የራሱን NewLabel ማሳየት
+      matched_disease = None
+      for key in DISEASE_ADVICE_AMHARIC:
+        if key.lower() in raw_label.lower() or raw_label.lower() in key.lower():
+          matched_disease = DISEASE_ADVICE_AMHARIC[key]
+          break
+
+      if not matched_disease:
+        # ካልተገኘ ነባሩን እንጠቀማለን
+        matched_disease = {
+            "name": raw_label.replace("_", " "),
+            "description": "ይህ የተለየ የበሽታ ዓይነት በስርዓቱ ተለይቷል።",
+            "treatment": "እባክዎ የአካባቢዎን የግብርና ባለሙያ ያማክሩ።",
+            "prevention": "ንጹህ የጸዳ አሰራር መከተል።",
+        }
+
+      st.success(f"**የተገኘው ችግር:** {matched_disease['name']}")
+      st.progress(
+          min(int(conf), 100), text=f"እርግጠኛነት (Confidence): {conf:.1f}%"
+      )
+
+      # የአማርኛ ምክር ማዕቀፍ (Box)
+      st.markdown("### 💡 የአማርኛ የባለሙያ ምክር እና መፍትሄዎች")
+      st.info(f"**ስለ በሽታው:**\n{matched_disease['description']}")
+
+      col1, col2 = st.columns(2)
+      with col1:
+        st.warning(f"**💊 የሕክምና እርምጃዎች:**\n{matched_disease['treatment']}")
+      with col2:
+        st.success(f"**🛡️ የመከላከያ መንገዶች:**\n{matched_disease['prevention']}")
+
+    # ሌሎች ግምቶችን ማሳየት (Expander)
+    with st.expander("🔍 ሌሎች የ AI ግምቶች (Top Predictions)"):
+      for r in results:
+        st.write(
+            f"• **{r['label'].replace('_', ' ')}** — {r['score'] * 100:.1f}%"
+        )
+
+  st.markdown("---")
+  st.info(
+      "ማሳሰቢያ፡ ይህ መተግበሪያ የተሰራው በ AI ሞዴል ግምት ላይ በመመስረት ሲሆን፣ ለተሻለ"
+      " እና ትክክለኛ ውሳኔ ሁልጊዜ የአካባቢዎን የግብርና ባለሙያ ምክር ያክሉ።"
+  )
