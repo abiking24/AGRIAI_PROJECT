@@ -46,7 +46,8 @@ if uploaded_file is not None:
             st.error("ስህተት ተፈጥሯል፤ እባክዎ እንደገና ይሞክሩ።")
         else:
             info = DISEASE_INFO[result]
-            with st.container(border=True):
+            with st.container():
+                # Main prediction summary
                 if result == "healthy":
                     st.success(f"የሰብሉ ሁኔታ፦ {info['disease_name']}")
                 else:
@@ -54,6 +55,37 @@ if uploaded_file is not None:
 
                 st.markdown("**ምክንያት / ማስታወሻ**")
                 st.write(info["cause"])
+
                 st.markdown("**የሚመከሩ እርምጃዎች**")
-                st.markdown("\n".join(f"- {remedy}" for remedy in info["remedies"]))
-                st.caption(info["limitation"])
+                st.markdown("\n".join(f"- {remedy}" for remedy in info.get("remedies", [])))
+
+                st.caption(info.get("limitation", ""))
+
+                # If a generic "diseased" result, offer common tomato-disease advice in Amharic
+                tomato_dict = DISEASE_INFO.get("tomato_common", {})
+                if result == "diseased" and tomato_dict:
+                    with st.expander("ተጨማሪ የቲማቲም ምክር (አማርኛ)"):
+                        # build options excluding the note key
+                        options = [k for k in tomato_dict.keys() if k != "note"]
+                        if options:
+                            choice = st.selectbox("እባኮትን ከዚህ ውስጥ አንዱን ይምረጡ:", options)
+                            chosen = tomato_dict.get(choice, {})
+
+                            st.subheader(chosen.get("amharic_name", choice))
+                            st.markdown("**ምክንያት**")
+                            st.write(chosen.get("cause", "-") )
+
+                            if chosen.get("remedies"):
+                                st.markdown("**ሕክምና / የሚመከሩ እርምጃዎች**")
+                                st.markdown("\n".join(f"- {r}" for r in chosen["remedies"]))
+
+                            if chosen.get("prevention"):
+                                st.markdown("**መከላከያ (Prevention)**")
+                                st.markdown("\n".join(f"- {p}" for p in chosen["prevention"]))
+
+                            # global note/disclaimer
+                            note = tomato_dict.get("note")
+                            if note:
+                                st.info(note)
+                        else:
+                            st.write("ከተዘርዘሩ የቲማቲም በሽታዎች መረጃ ለማቅረብ አልተገኘም።")
