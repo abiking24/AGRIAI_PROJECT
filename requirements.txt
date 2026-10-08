@@ -3,3 +3,4 @@ torch
 torchvision
 transformers
 pillow
+google-genai
