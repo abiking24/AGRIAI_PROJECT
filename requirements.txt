@@ -1,6 +1,9 @@
 streamlit
+pydeck>=0.8.0
+extra-streamlit-components>=0.1.81
 torch
 torchvision
 transformers
 pillow
 google-genai
+reportlab>=4.2
