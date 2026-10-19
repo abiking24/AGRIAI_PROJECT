@@ -22,6 +22,59 @@ from google import genai
 from google.genai import types
 
 
+# Browser geolocation is optional: the app falls back to Dilla if the user
+# declines the browser permission or the browser does not support the API.
+_BROWSER_LOCATION = st.components.v2.component(
+    "agre_ai_browser_location",
+    html="""
+    <div style="font: inherit; color: var(--st-text-color, #1f2937);">
+      <span id="location-status">Checking browser location…</span>
+    </div>
+    """,
+    js="""
+    export default function (component) {
+      const { parentElement, data, setStateValue } = component
+      const status = parentElement.querySelector("#location-status")
+      if (!status) return
+      if (data?.location || data?.status === "unsupported" || data?.status === "unavailable") {
+        status.textContent = data.location
+          ? "Browser location detected."
+          : "Location is unavailable. Choose a city below."
+        return
+      }
+      if (data?.status === "requesting") {
+        status.textContent = "Checking browser location…"
+        return
+      }
+      // parentElement is a ShadowRoot in CCv2, so keep the request guard in
+      // component state rather than relying on DOM dataset properties.
+      setStateValue("status", "requesting")
+      if (!navigator.geolocation) {
+        status.textContent = "Browser location is unavailable. Choose a city below."
+        setStateValue("status", "unsupported")
+        return
+      }
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          const latitude = position.coords.latitude
+          const longitude = position.coords.longitude
+          status.textContent = "Browser location detected."
+          setStateValue("location", { latitude, longitude, accuracy: position.coords.accuracy })
+          setStateValue("status", "located")
+        },
+        error => {
+          status.textContent = error.code === 1
+            ? "Location permission was not granted. Choose a city below."
+            : "Could not detect location. Choose a city below."
+          setStateValue("status", "unavailable")
+        },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 300000 }
+      )
+    }
+    """,
+)
+
+
 UI_AM = {
     "Home": "መነሻ", "About": "ስለ እኛ", "Detect": "ምርመራ", "Chatbot": "የውይይት ረዳት",
     "Pricing": "ዋጋ", "Contact": "ያግኙን", "Start Detecting": "ምርመራ ይጀምሩ",
@@ -148,6 +201,15 @@ UI_AM.update({
     "Map locations are approximate city-level positions. Other farmers’ names, phone numbers, and case references are not shown.": "የካርታ ቦታዎች በከተማ ደረጃ የተጠጋጉ ናቸው። የሌሎች አርሶ አደሮች ስም፣ ስልክ ቁጥርና የጉዳይ መለያ አይታይም።",
     "Your current report": "የአሁኑ ሪፖርትዎ", "Nearby community report": "የአቅራቢያ ማህበረሰብ ሪፖርት",
     "Reports could not be loaded for community mapping.": "ለማህበረሰብ ካርታ ሪፖርቶችን ማምጣት አልተቻለም።",
+    "Detailed nearby outbreak reports": "በቅርብ አካባቢ የተገኙ የወረርሽኝ ዝርዝር ሪፖርቶች",
+    "Actionable agronomic advice": "አፋጣኝ የሙያ እና የመከላከያ ምክር",
+    "km away": "ኪ.ሜ ርቀት ላይ",
+    "CRITICAL severity": "ከፍተኛ አደገኛ ደረጃ",
+    "HIGH severity": "መካከለኛ/ከፍተኛ ደረጃ",
+    "MODERATE severity": "መካከለኛ ደረጃ",
+    "MEDIUM severity": "መካከለኛ ደረጃ",
+    "Pathology translation unavailable": "የበሽታው ዓይነት ትርጉም አልተመዘገበም",
+    "Apply locally approved treatment only after expert confirmation. Remove heavily affected plants where appropriate, avoid overhead watering, and sanitize tools.": "ባለሙያ ካረጋገጠ በኋላ በአካባቢው የተፈቀደ ሕክምና ብቻ ይጠቀሙ። አስፈላጊ ሲሆን በጣም የተጎዱ ተክሎችን ያስወግዱ፣ ከላይ ውሃ ከመርጨት ይቆጠቡ፣ መሳሪያዎችንም ያጽዱ።",
     "Trend counts and expert review outcomes summarize similar local reports from the past 30 days. Individual audit notes remain private.": "የአዝማሚያ ቁጥሮችና የባለሙያ ግምገማ ውጤቶች ካለፉት 30 ቀናት ተመሳሳይ የአካባቢ ሪፖርቶች የተጠቃለሉ ናቸው። የግለሰብ የኦዲት ማስታወሻዎች በግል ይጠበቃሉ።",
     "Could not enable Remember Me. Please try again.": "የ‘አስታውሰኝ’ ባህሪን ማንቃት አልተቻለም። እባክዎ እንደገና ይሞክሩ።",
     "Your session is remembered on this device for 30 days. You can log out at any time to revoke it.": "መግቢያዎ በዚህ መሣሪያ ለ30 ቀናት ይታወሳል። በማንኛውም ጊዜ በመውጣት ማቋረጥ ይችላሉ።",
@@ -288,7 +350,93 @@ UI_AM.update({
     "Review or correct the transcript before using it": "ከመጠቀምዎ በፊት ግልባጩን ይመልከቱ ወይም ያስተካክሉ",
     "The transcript stays in the spoken language. Edit any recognition mistakes before diagnosis.": "ግልባጩ በተነገረበት ቋንቋ ይቆያል። ከምርመራ በፊት የድምፅ ማወቂያ ስህተቶችን ያስተካክሉ።",
     "Review or correct the transcript before sending": "ከመላክዎ በፊት ግልባጩን ይመልከቱ ወይም ያስተካክሉ",
+    "Speech recognition may be uncertain in the marked spans. Check the recording and edit the transcript before sending.": "በተጠቆሙት ክፍሎች የድምፅ ማወቂያው እርግጠኛ ላይሆን ይችላል። ከመላክዎ በፊት ድምፁን ያዳምጡና ግልባጩን ያስተካክሉ።",
+    "No uncertain spans were reported. Review the transcript before sending.": "ያልተረጋገጠ ክፍል አልተጠቆመም። ከመላክዎ በፊት ግልባጩን ይመልከቱ።",
+    "Record a voice question in Amharic or English.": "በአማርኛ ወይም በእንግሊዝኛ የድምፅ ጥያቄ ይቅረጹ።",
+    "Speak in Amharic or English. The transcript stays in the original language; review and edit it before submitting.": "በአማርኛ ወይም በእንግሊዝኛ ይናገሩ። ግልባጩ በተነገረበት ቋንቋ ይቆያል፤ ከማስገባትዎ በፊት ይመልከቱና ያስተካክሉ።",
     "Send voice question": "የድምፅ ጥያቄውን ይላኩ",
+    "WhatsApp and bulk SMS broadcast center": "የWhatsAppና የSMS ስርጭት ማዕከል",
+    "Broadcast Center": "የስርጭት ማዕከል", "Broadcast channel": "የስርጭት መንገድ",
+    "Location or district filter (leave blank for all opted-in locations)": "የአካባቢ ወይም የወረዳ ማጣሪያ (ሁሉንም ለማካተት ባዶ ይተዉ)",
+    "Eligible recipients (maximum 50 per broadcast)": "ብቁ ተቀባዮች (በአንድ ስርጭት ከ50 አይበልጥም)",
+    "Advisory message (Amharic first, then English)": "የምክር መልዕክት (መጀመሪያ አማርኛ፣ ከዚያ እንግሊዝኛ)",
+    "Dispatch broadcast": "ማስጠንቀቂያውን ላክ", "Extension broadcast preferences": "የኤክስቴንሽን ስርጭት ምርጫዎች",
+    "Town or district for extension broadcasts": "ለኤክስቴንሽን ስርጭት ከተማ ወይም ወረዳ",
+    "Allow extension broadcast SMS": "የኤክስቴንሽን SMS ስርጭት ፍቀድ",
+    "Allow extension broadcast WhatsApp": "የኤክስቴንሽን WhatsApp ስርጭት ፍቀድ",
+    "Save extension broadcast preferences": "የስርጭት ምርጫዎችን አስቀምጥ",
+    "Extension broadcast preferences saved. You can opt out at any time here.": "የኤክስቴንሽን ስርጭት ምርጫዎች ተቀምጠዋል። በማንኛውም ጊዜ ከዚህ መውጣት ይችላሉ።",
+    "Enter a town or district to enable broadcasts.": "ስርጭትን ለማንቃት ከተማ ወይም ወረዳ ያስገቡ።",
+    "Selected delivery provider is configured.": "የተመረጠው የመላኪያ አቅራቢ ተዋቅሯል።",
+    "Delivery is disabled until the selected provider is configured in Streamlit Secrets.": "በStreamlit Secrets ውስጥ የተመረጠው አቅራቢ እስኪዋቀር ድረስ መላክ ተዘግቷል።",
+    "No farmers have opted in to this channel at the selected location.": "በተመረጠው አካባቢ ለዚህ መንገድ የተመዘገበ ፈቃድ ያለው አርሶ አደር የለም።",
+    "Confirm the broadcast before dispatch.": "ከመላክዎ በፊት ስርጭቱን ያረጋግጡ።",
+    "Eligible nearby opted-in recipients: {count} · Radius: {radius} km": "በአቅራቢያ ፈቃድ የሰጡ ብቁ ተቀባዮች፦ {count} · ርቀት፦ {radius} ኪ.ሜ",
+    "Regional SMS proximity could not be calculated because the farm coordinates are unavailable.": "የእርሻው መጋጠሚያ ስለሌለ የክልላዊ SMS ቅርበትን ማስላት አልተቻለም።",
+    "Enter a message before dispatch.": "ከመላክዎ በፊት መልዕክት ያስገቡ።",
+    "Broadcast finished: {sent} sent, {failed} failed.": "ስርጭቱ ተጠናቋል፦ {sent} ተልኳል፣ {failed} አልተሳካም።",
+    "Delivery results and the campaign text are saved in the protected SQLite database for extension audit.": "የመላኪያ ውጤቶችና የዘመቻ መልዕክት ለኤክስቴንሽን ኦዲት በተጠበቀው SQLite ዳታቤዝ ይቀመጣሉ።",
+    "Send extension advisories only to farmers who separately opted in to the selected channel. Recipient phone numbers are never displayed here.": "የኤክስቴንሽን ምክሮችን ለተመረጠው መንገድ በተለይ ፈቃድ ለሰጡ አርሶ አደሮች ብቻ ይላኩ። የተቀባዮች ስልክ ቁጥር እዚህ አይታይም።",
+    "WhatsApp broadcasts use an approved Twilio Content Template. Configure TWILIO_WHATSAPP_FROM and TWILIO_WHATSAPP_CONTENT_SID; the approved template must contain one variable for the message body.": "የWhatsApp ስርጭት የተፈቀደ የTwilio Content Template ይጠቀማል። TWILIO_WHATSAPP_FROM እና TWILIO_WHATSAPP_CONTENT_SID ያዋቅሩ፤ የተፈቀደው ቴምፕሌት ለመልዕክት አካል አንድ ተለዋዋጭ ሊኖረው ይገባል።",
+    "These separate preferences control general extension SMS and WhatsApp advisories. They are independent of disease-outbreak warning opt-in.": "እነዚህ የተለዩ ምርጫዎች አጠቃላይ የኤክስቴንሽን SMSና WhatsApp ምክሮችን ይቆጣጠራሉ። ከበሽታ ማስጠንቀቂያ ፈቃድ የተለዩ ናቸው።",
+    "I have reviewed this advisory and confirm that it may be sent to the opted-in recipients above.": "ይህን ምክር ገምግሜዋለሁ፤ ከላይ ለተመለከቱት ፈቃድ ለሰጡ ተቀባዮች እንዲላክ አረጋግጣለሁ።",
+    "Include the affected location, dates, and practical advice. Do not include farmer names or private case details.": "የተጎዳውን አካባቢ፣ ቀኖችና ተግባራዊ ምክር ያካትቱ። የአርሶ አደር ስም ወይም የግል የጉዳይ ዝርዝር አያካትቱ።",
+})
+UI_AM.update({
+    "Yield Analytics": "የምርት ትንበያ",
+    "Multi-season yield prediction and analytics": "የብዙ ወቅቶች የምርት ትንበያና ትንተና",
+    "Use measured harvests and your saved disease history for transparent planning estimates. Estimates are not guaranteed yields or a calibrated crop model.": "የተመዘገቡ ምርቶችንና የበሽታ ታሪክን ለግልጽ የእቅድ ግምት ይጠቀሙ። ግምቶቹ የተረጋገጠ ምርት ወይም የተስተካከለ የሰብል ሞዴል አይደሉም።",
+    "Crop": "ሰብል", "Harvest season": "የመከር ወቅት", "Harvest year": "የመከር ዓመት",
+    "Season to plan for": "ለማቀድ የተመረጠ ወቅት",
+    "No harvest record matches the selected planning season; the estimate uses your recent records from other seasons.": "ከተመረጠው ወቅት ጋር የሚዛመድ መዝገብ የለም፤ ግምቱ ከሌሎች ወቅቶች የቅርብ መዝገቦችዎን ይጠቀማል።",
+    "Observed yield (quintals per hectare)": "የተመዘገበ ምርት (ኩንታል በሄክታር)",
+    "Irrigation status": "የመስኖ ሁኔታ", "Optional soil observation": "አማራጭ የአፈር ምልከታ",
+    "Record a measured observation or soil-test result; leave blank if unknown.": "የተለካ ምልከታ ወይም የአፈር ምርመራ ውጤት ይመዝግቡ፤ ካልታወቀ ባዶ ይተዉት።",
+    "Save harvest record": "የመከር መዝገብ ያስቀምጡ", "Harvest record saved.": "የመከር መዝገቡ ተቀምጧል።",
+    "Could not save this harvest record. Check the values and try again.": "የመከር መዝገቡን ማስቀመጥ አልተቻለም። መረጃውን ያረጋግጡና እንደገና ይሞክሩ።",
+    "Reference yield if no harvests are recorded (quintals per hectare)": "የመከር መዝገብ ከሌለ የማጣቀሻ ምርት (ኩንታል በሄክታር)",
+    "Use a local extension estimate or your own reference; zero means no estimate can be calculated yet.": "የአካባቢ ኤክስቴንሽን ግምት ወይም የራስዎን ማጣቀሻ ይጠቀሙ፤ ዜሮ ማለት ግምት ማስላት አይቻልም ማለት ነው።",
+    "Baseline yield": "መነሻ ምርት", "Recent disease records": "የቅርብ ጊዜ የበሽታ መዝገቦች",
+    "Next-season planning estimate": "የሚቀጥለው ወቅት የእቅድ ግምት",
+    "Season outlook": "የወቅት ትንበያ", "Estimated yield (quintals per hectare)": "የተገመተ ምርት (ኩንታል በሄክታር)",
+    "Recorded season history": "የተመዘገበ የወቅት ታሪክ", "Season": "ወቅት",
+    "Soil observation": "የአፈር ምልከታ", "Not recorded": "አልተመዘገበም",
+    "No harvest records are saved for this crop yet.": "ለዚህ ሰብል እስካሁን የመከር መዝገብ የለም።",
+    "Season planning and soil health": "የወቅት እቅድና የአፈር ጤና",
+    "Compare harvests from the same crop and season. Record soil-test pH, organic matter and nutrient results when available; soil health cannot be inferred from disease records or weather alone.": "የአንድ ሰብልና ወቅት ምርቶችን ያነጻጽሩ። ሲገኝ የአፈር pH፣ ኦርጋኒክ ቁስና የንጥረ ነገር ውጤት ይመዝግቡ፤ የአፈር ጤናን ከበሽታ መዝገብ ወይም ከአየር ሁኔታ ብቻ መገመት አይቻልም።",
+    "Review the recent disease cases with an extension worker and include locally appropriate sanitation and rotation in the next season plan.": "የቅርብ ጊዜ የበሽታ ጉዳዮችን ከኤክስቴንሽን ባለሙያ ጋር ይገምግሙ፤ ተስማሚ የንጽህናና የሰብል ፈረቃ እቅድ ያካትቱ።",
+    "No matching disease cases were found in the past year. Continue scouting and record harvests to improve future comparisons.": "ባለፈው ዓመት ተዛማጅ የበሽታ ጉዳይ አልተገኘም። ክትትልዎን ይቀጥሉና የወደፊት ንጽጽር ለማሻሻል ምርትዎን ይመዝግቡ።",
+    "Rain-fed": "በዝናብ ብቻ", "Supplemental": "ተጨማሪ መስኖ", "Irrigated": "በመስኖ", "Unknown": "አይታወቅም",
+    "Belg": "በልግ", "Meher": "መኸር", "Bega": "በጋ", "Other": "ሌላ",
+    "Next comparable season": "የሚቀጥለው ተመሳሳይ ወቅት",
+    "Following season · improved management": "ቀጣይ ወቅት · የተሻሻለ አስተዳደር",
+    "Third season · sustained field monitoring": "ሦስተኛ ወቅት · ቀጣይ የእርሻ ክትትል",
+    "farmer-recorded recent seasons": "በአርሶ አደሩ የተመዘገቡ የቅርብ ወቅቶች",
+    "farmer-recorded matching-season history": "በአርሶ አደሩ የተመዘገበ ተመሳሳይ ወቅት ታሪክ",
+    "farmer-provided reference yield": "በአርሶ አደሩ የቀረበ የማጣቀሻ ምርት",
+    "Estimate source: {source}. Planning adjustment: disease {disease:.0f}% · current weather {weather:.0f}%. Open-Meteo current conditions are not a seasonal forecast.": "የግምቱ ምንጭ፦ {source}። የእቅድ ማስተካከያ፦ በሽታ {disease:.0f}% · የአሁኑ አየር ሁኔታ {weather:.0f}%. የOpen-Meteo ወቅታዊ መረጃ የወቅታዊ ትንበያ አይደለም።",
+    "Current conditions": "ወቅታዊ ሁኔታ", "Local weather context": "የአካባቢ አየር አውድ",
+    "Three-day rainfall outlook": "የሶስት ቀን የዝናብ ትንበያ",
+    "This short-range signal is used only as a cautious planning adjustment, not a seasonal forecast.": "ይህ የአጭር ጊዜ መረጃ ለጥንቃቄ የእቅድ ማስተካከያ ብቻ ይጠቅማል፤ የወቅት ትንበያ አይደለም።",
+    "Irrigation represented in saved harvests": "በተቀመጡ የመከር መዝገቦች የተወከለ መስኖ",
+    "For rain-fed seasons, compare planting dates with local rainfall onset and keep a contingency plan for dry spells.": "በዝናብ ለሚመረኮዙ ወቅቶች የመዝሪያ ቀንን ከአካባቢ የዝናብ መጀመሪያ ጋር ያወዳድሩና ለድርቅ ጊዜ የአማራጭ እቅድ ያዘጋጁ።",
+    "For irrigated seasons, check water availability, system condition and soil moisture before scheduling applications.": "በመስኖ ለሚታገዙ ወቅቶች መስኖ ከማቀድዎ በፊት የውሃ አቅርቦትን፣ የመስኖ ስርዓቱንና የአፈር እርጥበትን ያረጋግጡ።",
+    "Regional multi-season yield analytics": "የክልል የብዙ ወቅቶች የምርት ትንተና",
+    "Aggregated harvest records are shown without farmer names, IDs, phone numbers, or exact farm coordinates.": "የአርሶ አደሮች ስም፣ መለያ፣ ስልክ ወይም ትክክለኛ የእርሻ መጋጠሚያ ሳይታይ የተጠቃለሉ የመከር መዝገቦች ይታያሉ።",
+    "Confirmed disease records": "የተረጋገጡ የበሽታ መዝገቦች", "Farm records": "የእርሻ መዝገቦች",
+    "Regional weather location": "የክልል አየር ሁኔታ አካባቢ",
+    "Regional temperature": "የክልል ሙቀት", "Regional humidity": "የክልል እርጥበት",
+    "Rain forecast · next 3 days": "የዝናብ ትንበያ · ቀጣይ 3 ቀናት",
+    "Live regional weather is unavailable right now.": "የቀጥታ የክልል አየር መረጃ በአሁኑ ጊዜ አይገኝም።",
+    "Average observed yield (quintals per hectare)": "አማካይ የተመዘገበ ምርት (ኩንታል በሄክታር)",
+    "Irrigation systems reported": "የተመዘገቡ የመስኖ ዘዴዎች",
+    "Tomato": "ቲማቲም", "Potato": "ድንች", "Onion": "ሽንኩርት",
+    "Cabbage": "ጎመን", "Pepper": "ጣምጣጤ (በርበሬ/ቃሪያ)",
+    "Garlic": "ነጭ ሽንኩርት", "Carrot": "ካሮት",
+    "quintals/ha": "ኩንታል/ሄክታር",
+    "Farmer harvest records will appear here after they are entered in Yield Analytics.": "የአርሶ አደር የመከር መዝገቦች በምርት ትንበያ ክፍል ከገቡ በኋላ እዚህ ይታያሉ።",
+    "These are descriptive averages of submitted records, not a representative regional survey or official production statistics.": "እነዚህ የቀረቡ መዝገቦች ገላጭ አማካዮች ናቸው፤ የክልል ወካይ ጥናት ወይም ኦፊሴላዊ የምርት ስታቲስቲክስ አይደሉም።",
+    "Add a measured harvest or local reference yield to calculate a planning estimate.": "የእቅድ ግምት ለማስላት የተለካ ምርት ወይም የአካባቢ ማጣቀሻ ምርት ያስገቡ።",
 })
 UI_EN.update({
     "የግብርና ግብይት ማዕከል": "Marketplace",
@@ -470,8 +618,8 @@ def render_marketplace_page(public=False):
 # --------------------------------------------------
 st.set_page_config(
     page_title="Agre AI Crop Health Services",
-    page_icon="🌿",
-    layout="wide",
+    page_icon="🌱",
+    layout="centered",
 )
 
 # User-requested AgriTech brand system. The toggle below switches this palette
@@ -480,15 +628,24 @@ st.session_state.setdefault("agri_dark_mode", False)
 st.session_state.setdefault("agri_dark_mode_toggle", st.session_state["agri_dark_mode"])
 st.session_state.setdefault("lang", "en")
 dark_mode = st.session_state["agri_dark_mode"]
-page_bg = "#101A14" if dark_mode else "#F5F8F4"
+page_bg = (
+    "linear-gradient(135deg, #101A14 0%, #17251B 100%)"
+    if dark_mode
+    else "linear-gradient(135deg, #F1F8F5 0%, #DCEDC8 100%)"
+)
 surface = "#17251B" if dark_mode else "#FFFFFF"
 ink = "#E6F0E7" if dark_mode else "#183326"
+label_ink = "#E6F0E7" if dark_mode else "#1B4D3E"
 muted = "#B5C8B8" if dark_mode else "#607568"
 line = "#314639" if dark_mode else "#DCE8DE"
 st.markdown(f"""
 <style>
-  :root {{ --agri-green:#1B5E20; --agri-muted:{muted}; --agri-line:{line}; }}
-  .stApp {{ background:{page_bg}; }}
+  #MainMenu, footer, header[data-testid="stHeader"], .stDeployButton,
+  div[data-testid="stToolbar"] {{ visibility:hidden; display:none; }}
+  :root {{ --agri-green:#1B5E20; --agri-muted:{muted}; --agri-line:{line}; --agri-label:{label_ink}; }}
+  .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
+    background:{page_bg} !important;
+  }}
   [data-testid="stSidebar"] {{ background:{page_bg}; border-right:1px solid var(--agri-line); }}
   h1,h2,h3 {{ color:{ink}; letter-spacing:-.025em; }}
   p, label, [data-testid="stMarkdownContainer"] {{ color:{ink}; }}
@@ -496,11 +653,25 @@ st.markdown(f"""
   [data-testid="stMetricLabel"] {{ color:var(--agri-muted); font-weight:600; }}
   [data-testid="stMetricValue"] {{ color:#2E7D32; font-weight:750; }}
   [data-testid="stExpander"] {{ border:1px solid var(--agri-line); border-radius:14px; background:{surface}; }}
-  div.stButton > button[kind="primary"], div.stFormSubmitButton > button[kind="primary"] {{
-    background:var(--agri-green); border-color:var(--agri-green); border-radius:10px; }}
-  div.stButton > button {{ border-radius:10px; font-weight:650; min-height:2.6rem; }}
-  .agri-navbar {{ background:linear-gradient(100deg,#0D3B1E,#1B5E20); color:#fff; border-radius:16px; padding:15px 22px; margin:4px 0 16px; display:flex; align-items:center; justify-content:space-between; gap:18px; box-shadow:0 8px 24px rgba(13,59,30,.18); }}
-  .agri-brand {{ color:#fff; font-size:1.28rem; font-weight:850; letter-spacing:.08em; white-space:nowrap; }}
+  div.stButton > button, div.stFormSubmitButton > button {{ width:100% !important; border-radius:10px !important; height:48px !important;
+    background:#1B4D3E !important; color:#fff !important; border:none !important;
+    font-weight:600 !important; font-size:15px !important;
+    box-shadow:0 4px 10px rgba(27,77,62,.15) !important;
+    transition:all .2s ease-in-out !important; }}
+  div.stButton > button *, div.stFormSubmitButton > button * {{
+    color:#fff !important; font-weight:700 !important;
+  }}
+  div.stButton > button:hover, div.stFormSubmitButton > button:hover {{ background:#2E7D32 !important; color:#fff !important;
+    box-shadow:0 6px 14px rgba(46,125,50,.25) !important; }}
+  div.stButton > button:hover *, div.stFormSubmitButton > button:hover * {{ color:#fff !important; }}
+  .stTextInput label, .stSelectbox label, .stRadio label, .stNumberInput label,
+  .stTextArea label, .stFileUploader label, [data-testid="stWidgetLabel"] {{
+    color:var(--agri-label) !important; font-weight:600 !important;
+  }}
+  .agri-navbar {{ background:linear-gradient(135deg,#1B4D3E 0%,#2E7D32 100%); color:#fff;
+    border-radius:14px; padding:20px; margin:4px 0 20px; display:flex; align-items:center;
+    justify-content:center; text-align:center; box-shadow:0 6px 16px rgba(27,77,62,.2); }}
+  .agri-brand {{ color:#fff; font-size:22px; font-weight:700; white-space:nowrap; }}
   .agri-navlinks {{ display:flex; gap:clamp(10px,2vw,26px); flex-wrap:wrap; justify-content:center; }}
   .agri-navlinks a {{ color:#EAF4E9; text-decoration:none; font-weight:600; font-size:.9rem; }}
   .agri-navlinks a:hover {{ color:#BDE6A7; }}
@@ -587,6 +758,8 @@ def redact_configured_credentials(text):
       get_api_key(),
       *get_telegram_credentials(),
       get_expert_portal_password(),
+      _configured_value("TWILIO_WHATSAPP_FROM"),
+      _configured_value("TWILIO_WHATSAPP_CONTENT_SID"),
       sms_settings.get("twilio_sid", ""),
       sms_settings.get("twilio_token", ""),
       sms_settings.get("at_api_key", ""),
@@ -994,7 +1167,11 @@ def generate_content_automatically(contents, model_names=None):
 
 
 def transcribe_audio_exact(audio_bytes, mime_type="audio/webm"):
-  """Transcribe speech verbatim in its original language, without translation."""
+  """Return a structured verbatim transcript and explicitly marked uncertain spans."""
+  if not audio_bytes:
+    raise ValueError("The recording is empty. Record a question and try again.")
+  if len(audio_bytes) > 20 * 1024 * 1024:
+    raise ValueError("The recording is too large. Keep audio recordings under 20 MB.")
   normalized_mime = str(mime_type or "audio/webm").split(";", 1)[0].strip().lower()
   if not normalized_mime.startswith("audio/"):
     normalized_mime = "audio/webm"
@@ -1015,14 +1192,28 @@ The transcription value must contain only what was spoken, in the original langu
   cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
   try:
     parsed = json.loads(cleaned)
+    if not isinstance(parsed, dict):
+      raise ValueError("Speech recognition returned an invalid response. Please record again.")
     transcript = str(parsed.get("transcription", "")).strip()
     language = str(parsed.get("language", "Unclear")).strip()
-    if transcript:
-      return {"transcription": transcript, "language": language}
-  except (json.JSONDecodeError, AttributeError, TypeError):
-    pass
-  # Keep non-JSON model output visible for user review rather than rewriting it.
-  return {"transcription": cleaned, "language": "Unclear"}
+    uncertain_spans = parsed.get("uncertain_spans", [])
+    if not isinstance(uncertain_spans, list):
+      uncertain_spans = []
+    if not transcript:
+      raise ValueError("No speech could be transcribed. Please try a clearer recording.")
+    if len(transcript) > 10000:
+      raise ValueError("The transcript is unexpectedly long. Please record a shorter question.")
+    if language not in ("Amharic", "English", "Other", "Unclear"):
+      language = "Unclear"
+    return {
+        "transcription": transcript,
+        "language": language,
+        "uncertain_spans": [str(span)[:200] for span in uncertain_spans[:20]],
+    }
+  except (json.JSONDecodeError, AttributeError, TypeError) as error:
+    raise ValueError(
+        "Speech recognition could not return a verified transcript. Please record again."
+    ) from error
 
 
 def gemini_error_message(error):
@@ -1141,6 +1332,52 @@ def init_db():
                 dispatch_status TEXT NOT NULL,
                 attempted_at TEXT NOT NULL,
                 PRIMARY KEY(case_ref, recipient_user_id)
+            )
+        """)
+      conn.execute("""
+            CREATE TABLE IF NOT EXISTS yield_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                crop TEXT NOT NULL,
+                season TEXT NOT NULL,
+                season_year INTEGER NOT NULL,
+                yield_quintals_ha REAL NOT NULL,
+                irrigation_status TEXT NOT NULL,
+                soil_observation TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(user_id, crop, season, season_year),
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+      conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_consents (
+                user_id TEXT PRIMARY KEY,
+                location_name TEXT NOT NULL DEFAULT '',
+                sms_opt_in INTEGER NOT NULL DEFAULT 0,
+                whatsapp_opt_in INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """)
+      conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_campaigns (
+                campaign_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_by TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                location_filter TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+      conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_dispatches (
+                campaign_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                dispatch_status TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                attempted_at TEXT NOT NULL,
+                PRIMARY KEY(campaign_id, user_id),
+                FOREIGN KEY(campaign_id) REFERENCES broadcast_campaigns(campaign_id) ON DELETE CASCADE
             )
         """)
       now_utc = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1388,15 +1625,180 @@ def _send_sms_message(provider_config, recipient, message):
   return False
 
 
+def load_broadcast_consent(user_id):
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      row = conn.execute(
+          "SELECT location_name, sms_opt_in, whatsapp_opt_in FROM broadcast_consents WHERE user_id = ?",
+          (str(user_id),),
+      ).fetchone()
+    if row:
+      return {"location_name": row[0] or "", "sms_opt_in": bool(row[1]), "whatsapp_opt_in": bool(row[2])}
+  except sqlite3.Error as error:
+    print(f"Broadcast consent load error: {redact_configured_credentials(error)}")
+  return {"location_name": "", "sms_opt_in": False, "whatsapp_opt_in": False}
+
+
+def save_broadcast_consent(user_id, location_name, sms_opt_in, whatsapp_opt_in):
+  location_name = str(location_name or "").strip()[:120]
+  sms_opt_in, whatsapp_opt_in = bool(sms_opt_in), bool(whatsapp_opt_in)
+  if (sms_opt_in or whatsapp_opt_in) and not location_name:
+    return False
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      if not sms_opt_in and not whatsapp_opt_in:
+        conn.execute("DELETE FROM broadcast_consents WHERE user_id = ?", (str(user_id),))
+      else:
+        conn.execute(
+            """INSERT INTO broadcast_consents
+               (user_id, location_name, sms_opt_in, whatsapp_opt_in, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET location_name=excluded.location_name,
+                 sms_opt_in=excluded.sms_opt_in, whatsapp_opt_in=excluded.whatsapp_opt_in,
+                 updated_at=excluded.updated_at""",
+            (str(user_id), location_name, int(sms_opt_in), int(whatsapp_opt_in),
+             datetime.now(ZoneInfo("Africa/Addis_Ababa")).strftime("%Y-%m-%d %H:%M:%S EAT")),
+        )
+    return True
+  except sqlite3.Error as error:
+    print(f"Broadcast consent save error: {redact_configured_credentials(error)}")
+    return False
+
+
+def get_whatsapp_broadcast_config():
+  sender = _configured_value("TWILIO_WHATSAPP_FROM")
+  template_sid = _configured_value("TWILIO_WHATSAPP_CONTENT_SID")
+  try:
+    group = st.secrets.get("whatsapp", {})
+    if hasattr(group, "get"):
+      sender = sender or str(group.get("twilio_from", "") or "").strip()
+      template_sid = template_sid or str(group.get("content_template_sid", "") or "").strip()
+  except Exception:
+    pass
+  if not re.fullmatch(r"whatsapp:\+[1-9]\d{7,14}", sender):
+    sender = ""
+  if not re.fullmatch(r"HX[0-9a-fA-F]{32}", template_sid):
+    template_sid = ""
+  sms_config = get_sms_provider_config()
+  return {
+      "account_sid": sms_config.get("twilio_sid", ""),
+      "auth_token": sms_config.get("twilio_token", ""),
+      "from": sender,
+      "content_sid": template_sid,
+      "ready": bool(sms_config.get("twilio_sid") and sms_config.get("twilio_token") and sender and template_sid),
+  }
+
+
+def _send_whatsapp_template(config, phone_number, message):
+  recipient = _sms_phone_e164(phone_number)
+  if not recipient or not config.get("ready"):
+    return False
+  try:
+    response = requests.post(
+        f"https://api.twilio.com/2010-04-01/Accounts/{config['account_sid']}/Messages.json",
+        data={
+            "To": f"whatsapp:{recipient}",
+            "From": config["from"],
+            "ContentSid": config["content_sid"],
+            "ContentVariables": json.dumps({"1": message}, ensure_ascii=False),
+        },
+        auth=(config["account_sid"], config["auth_token"]), timeout=8,
+    )
+    return response.ok
+  except requests.RequestException:
+    return False
+
+
+def load_broadcast_recipients(channel, location_filter="", limit=50):
+  consent_column = "sms_opt_in" if channel == "SMS" else "whatsapp_opt_in"
+  pattern = f"%{str(location_filter or '').strip()[:120]}%"
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      return conn.execute(
+          f"""SELECT u.user_id, u.phone_number, c.location_name
+                FROM broadcast_consents AS c JOIN users AS u ON u.user_id = c.user_id
+                WHERE c.{consent_column} = 1 AND TRIM(c.location_name) <> ''
+                  AND lower(c.location_name) LIKE lower(?)
+                ORDER BY c.location_name, u.user_id LIMIT ?""",
+          (pattern, min(50, max(1, int(limit)))),
+      ).fetchall()
+  except sqlite3.Error as error:
+    print(f"Broadcast recipient lookup error: {redact_configured_credentials(error)}")
+    return []
+
+
+def dispatch_extension_broadcast(channel, location_filter, message, expert_label="Extension Expert"):
+  """Dispatch only to farmers who explicitly opted into this channel."""
+  message = str(message or "").strip()
+  max_chars = 480 if channel == "SMS" else 1000
+  if channel not in ("SMS", "WhatsApp") or not message or len(message) > max_chars:
+    return {"sent": 0, "failed": 0, "error": "invalid"}
+  recipients = load_broadcast_recipients(channel.upper() if channel == "SMS" else "WhatsApp", location_filter)
+  if not recipients:
+    return {"sent": 0, "failed": 0, "error": "no_recipients"}
+  sms_config = get_sms_provider_config() if channel == "SMS" else None
+  whatsapp_config = get_whatsapp_broadcast_config() if channel == "WhatsApp" else None
+  provider = sms_config["provider"] if sms_config else "Twilio WhatsApp"
+  ready = sms_config["provider"] != "mock" if sms_config else whatsapp_config["ready"]
+  if not ready:
+    return {"sent": 0, "failed": 0, "error": "provider_unconfigured"}
+  created_at = datetime.now(ZoneInfo("Africa/Addis_Ababa")).strftime("%Y-%m-%d %H:%M:%S EAT")
+  sent = failed = 0
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      cursor = conn.execute(
+          "INSERT INTO broadcast_campaigns (created_by, channel, location_filter, message, created_at) VALUES (?, ?, ?, ?, ?)",
+          (str(expert_label)[:100], channel, str(location_filter or "")[:120], message, created_at),
+      )
+      campaign_id = cursor.lastrowid
+  except sqlite3.Error as error:
+    print(f"Broadcast campaign save error: {redact_configured_credentials(error)}")
+    return {"sent": 0, "failed": 0, "error": "database"}
+  for recipient_user_id, phone_number, _location in recipients:
+    if channel == "SMS":
+      success = _send_sms_message(sms_config, _sms_phone_e164(phone_number), message)
+    else:
+      success = _send_whatsapp_template(whatsapp_config, phone_number, message)
+    status = "sent" if success else "failed"
+    sent += int(success)
+    failed += int(not success)
+    try:
+      with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        conn.execute(
+            "INSERT INTO broadcast_dispatches (campaign_id, user_id, dispatch_status, provider, attempted_at) VALUES (?, ?, ?, ?, ?)",
+            (campaign_id, str(recipient_user_id), status, provider, datetime.now(ZoneInfo("Africa/Addis_Ababa")).strftime("%Y-%m-%d %H:%M:%S EAT")),
+        )
+    except sqlite3.Error as error:
+      print(f"Broadcast delivery log error: {redact_configured_credentials(error)}")
+  return {"sent": sent, "failed": failed, "error": ""}
+
+
+def load_recent_broadcasts(limit=10):
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      return conn.execute(
+          """SELECT c.campaign_id, c.channel, c.location_filter, c.message, c.created_at,
+                    SUM(CASE WHEN d.dispatch_status = 'sent' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN d.dispatch_status = 'failed' THEN 1 ELSE 0 END)
+               FROM broadcast_campaigns AS c
+               LEFT JOIN broadcast_dispatches AS d ON d.campaign_id = c.campaign_id
+               GROUP BY c.campaign_id ORDER BY c.campaign_id DESC LIMIT ?""",
+          (max(1, min(50, int(limit))),),
+      ).fetchall()
+  except sqlite3.Error as error:
+    print(f"Broadcast history load error: {redact_configured_credentials(error)}")
+    return []
+
+
 def send_regional_outbreak_sms(case_ref, current_user_id, location_name,
                                latitude, longitude, pathology, disease_status):
-  """Warn nearby opted-in farmers; this best-effort path never raises to diagnosis."""
+  """Calculate nearby opted-in farmer count while regional SMS is Coming Soon."""
   if str(disease_status).upper() != "DISEASE" or not str(pathology or "").strip():
-    return {"sent": 0, "eligible": 0, "provider": "none"}
+    return {"sent": 0, "eligible": 0, "provider": "mock", "radius_km": get_sms_proximity_radius_km(), "calculated": False}
   try:
     latitude, longitude = float(latitude), float(longitude)
   except (TypeError, ValueError):
-    return {"sent": 0, "eligible": 0, "provider": "none"}
+    return {"sent": 0, "eligible": 0, "provider": "mock", "radius_km": get_sms_proximity_radius_km(), "calculated": False}
   radius_km = get_sms_proximity_radius_km()
   with sqlite3.connect(DB_PATH, timeout=10) as conn:
     rows = conn.execute(
@@ -1412,38 +1814,16 @@ def send_regional_outbreak_sms(case_ref, current_user_id, location_name,
         (str(current_user_id), str(case_ref)),
     ).fetchall()
   nearby = [row for row in rows if _geo_distance_km(latitude, longitude, row[2], row[3]) <= radius_km]
-  provider_config = get_sms_provider_config()
-  if provider_config["provider"] == "mock" or not nearby:
-    return {"sent": 0, "eligible": len(nearby), "provider": provider_config["provider"]}
-
-  message = (
-      f"ማስጠንቀቂያ: {pathology} በ{location_name} አቅራቢያ ተመዝግቧል። "
-      "ሰብልዎን ይመርምሩ፣ የተጠቁ ተክሎችን ከማንቀሳቀስ ይቆጠቡ፣ የአካባቢ የግብርና ባለሙያን ያነጋግሩ።\n"
-      f"Agre AI early warning: {pathology} reported near {location_name}. "
-      "Check your crops and contact a local extension worker before treatment."
-  )[:700]
-  sent_count = 0
-  attempted_at = datetime.now(ZoneInfo("Africa/Addis_Ababa")).strftime("%Y-%m-%d %H:%M:%S EAT")
-  for recipient_user_id, phone_number, _, _ in nearby:
-    recipient = _sms_phone_e164(phone_number)
-    success = bool(recipient) and _send_sms_message(provider_config, recipient, message)
-    try:
-      with sqlite3.connect(DB_PATH, timeout=10) as conn:
-        conn.execute(
-            """INSERT INTO regional_sms_dispatches
-               (case_ref, recipient_user_id, provider, dispatch_status, attempted_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(case_ref, recipient_user_id) DO UPDATE SET
-                 provider=excluded.provider,
-                 dispatch_status=excluded.dispatch_status,
-                 attempted_at=excluded.attempted_at""",
-            (str(case_ref), str(recipient_user_id), provider_config["provider"],
-             "sent" if success else "failed", attempted_at),
-        )
-    except sqlite3.Error as error:
-      print(f"SMS dispatch log error: {error}")
-    sent_count += int(success)
-  return {"sent": sent_count, "eligible": len(nearby), "provider": provider_config["provider"]}
+  # Regional outbreak SMS remains in mock mode while the farmer-facing
+  # service is labeled Coming Soon. Keep the opt-in and Haversine calculation
+  # live, but never send automatically from a diagnosis result.
+  return {
+      "sent": 0,
+      "eligible": len(nearby),
+      "provider": "mock",
+      "radius_km": radius_km,
+      "calculated": True,
+  }
 
 
 def save_to_db(
@@ -1647,9 +2027,10 @@ def _set_authenticated_user(account, cookie_manager, remember=False):
   st.session_state.pop("auth_remember_token", None)
   for state_key in (
       "transcription", "transcription_language", "transcription_error",
-      "transcription_review", "last_audio_fingerprint", "chat_audio_fingerprint",
+      "transcription_review", "transcription_uncertain_spans", "last_audio_fingerprint", "chat_audio_fingerprint",
       "chat_voice_transcript", "chat_voice_language", "chat_voice_review",
-      "chat_voice_error", "chat_history", "initial_analyzed",
+      "chat_voice_uncertain_spans", "chat_voice_error", "agronomist_voice_uncertain",
+      "yield_report_summary", "yield_report_crop", "chat_history", "initial_analyzed",
   ):
     st.session_state.pop(state_key, None)
 
@@ -1690,9 +2071,11 @@ def _clear_authenticated_user(cookie_manager):
       "auth_user", "logged_in", "user_id", "phone", "email",
       "auth_session_id", "auth_remember_token", "chat_history",
       "initial_analyzed", "transcription", "transcription_language",
-      "transcription_error", "transcription_review", "last_audio_fingerprint",
+      "transcription_error", "transcription_review", "transcription_uncertain_spans", "last_audio_fingerprint",
       "chat_audio_fingerprint", "chat_voice_transcript", "chat_voice_language",
-      "chat_voice_review", "chat_voice_error", "last_audio_size", "reset_audio",
+      "chat_voice_review", "chat_voice_uncertain_spans", "chat_voice_error",
+      "agronomist_voice_uncertain", "last_audio_size", "reset_audio",
+      "yield_report_summary", "yield_report_crop",
       "remember_login_notice",
       "remember_login_error",
   ):
@@ -2007,6 +2390,11 @@ def coordinates_for_case_location(location_name):
     if re.search(rf"\b{re.escape(city_name)}\b", normalized_location):
       return coordinates
   return geocode_map_location(location)
+
+
+def mark_location_override():
+  """Keep an explicit farmer city choice when browser GPS updates arrive."""
+  st.session_state["location_city_manually_selected"] = True
 
 
 def _pathology_category(pathology):
@@ -2385,6 +2773,245 @@ def extract_saved_field(details, field_name, default="Not recorded"):
   return match.group(1).strip() if match else default
 
 
+YIELD_CROPS = ("Tomato", "Potato", "Onion", "Cabbage", "Pepper", "Garlic", "Carrot")
+YIELD_SEASONS = ("Belg", "Meher", "Bega", "Other")
+
+
+def format_yield_amount(value):
+  """Format the canonical quintals-per-hectare value in the active language."""
+  return f"{float(value):.1f} {tr('quintals/ha')}"
+
+
+def load_yield_observations(user_id, crop=None):
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      if crop:
+        rows = conn.execute(
+            """SELECT crop, season, season_year, yield_quintals_ha,
+                      irrigation_status, COALESCE(soil_observation, '')
+                 FROM yield_observations WHERE user_id = ? AND crop = ?
+                 ORDER BY season_year, id""",
+            (str(user_id), str(crop)),
+        ).fetchall()
+      else:
+        rows = conn.execute(
+            """SELECT crop, season, season_year, yield_quintals_ha,
+                      irrigation_status, COALESCE(soil_observation, '')
+                 FROM yield_observations WHERE user_id = ?
+                 ORDER BY season_year, id""",
+            (str(user_id),),
+        ).fetchall()
+    return [dict(zip(("crop", "season", "year", "yield_q_ha", "irrigation", "soil"), row)) for row in rows]
+  except sqlite3.Error as error:
+    print(f"Yield history load error: {redact_configured_credentials(error)}")
+    return []
+
+
+def save_yield_observation(user_id, crop, season, season_year, yield_q_ha, irrigation, soil):
+  if crop not in YIELD_CROPS or season not in YIELD_SEASONS:
+    return False
+  if irrigation not in ("Rain-fed", "Supplemental", "Irrigated", "Unknown"):
+    return False
+  try:
+    value = float(yield_q_ha)
+    year = int(season_year)
+    if not 0 < value <= 1000 or not 2000 <= year <= datetime.now().year + 1:
+      return False
+    timestamp = datetime.now(ZoneInfo("Africa/Addis_Ababa")).strftime("%Y-%m-%d %H:%M:%S EAT")
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      conn.execute(
+          """INSERT INTO yield_observations
+             (user_id, crop, season, season_year, yield_quintals_ha,
+              irrigation_status, soil_observation, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(user_id, crop, season, season_year) DO UPDATE SET
+               yield_quintals_ha=excluded.yield_quintals_ha,
+               irrigation_status=excluded.irrigation_status,
+               soil_observation=excluded.soil_observation,
+               created_at=excluded.created_at""",
+          (str(user_id), crop, season, year, value, irrigation, str(soil or "")[:500], timestamp),
+      )
+    return True
+  except (sqlite3.Error, TypeError, ValueError) as error:
+    print(f"Yield history save error: {redact_configured_credentials(error)}")
+    return False
+
+
+def estimate_yield_scenarios(observations, disease_count, weather_context):
+  """Transparent planning estimate; not a calibrated agronomic yield model."""
+  sorted_yields = sorted(float(row["yield_q_ha"]) for row in observations if row.get("yield_q_ha"))
+  if sorted_yields:
+    baseline = sum(sorted_yields[-3:]) / len(sorted_yields[-3:])
+    source = "farmer-recorded recent seasons"
+  else:
+    baseline = float(weather_context.get("reference_yield", 0) or 0)
+    source = "farmer-provided reference yield"
+  disease_penalty = min(0.20, max(0, int(disease_count)) * 0.03)
+  rain = weather_context.get("rain_mm")
+  humidity = weather_context.get("humidity")
+  weather_penalty = 0.0
+  if rain is not None and float(rain) > 20:
+    weather_penalty += 0.04
+  if humidity is not None and float(humidity) >= 85:
+    weather_penalty += 0.04
+  total_penalty = min(0.35, disease_penalty + weather_penalty)
+  estimate = baseline * (1 - total_penalty) if baseline else 0
+  return {
+      "baseline": baseline,
+      "source": source,
+      "disease_penalty": disease_penalty,
+      "weather_penalty": weather_penalty,
+      "estimate": estimate,
+      "scenarios": [
+          ("Next comparable season", estimate),
+          ("Following season · improved management", min(baseline, estimate * 1.05)),
+          ("Third season · sustained field monitoring", min(baseline, estimate * 1.08)),
+      ],
+  }
+
+
+def load_user_disease_season_counts(user_id, crop):
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      rows = conn.execute(
+          """SELECT timestamp, COALESCE(crop_name, ''), crop_pathology_details
+               FROM analyses WHERE user_id = ?
+                 AND UPPER(COALESCE(crop_pathology_details, '')) LIKE '%STATUS: DISEASE%'""",
+          (str(user_id),),
+      ).fetchall()
+    matching = []
+    crop_key = str(crop or "").casefold()
+    for timestamp, crop_name, details in rows:
+      saved_crop = extract_saved_field(details, "Crop", crop_name)
+      saved_crop_key = str(saved_crop or "").casefold()
+      is_other = saved_crop_key in ("other", "unknown", "not recorded", "")
+      if (crop_key == "other" and is_other) or (crop_key != "other" and crop_key in saved_crop_key):
+        matching.append((timestamp, details))
+    return matching
+  except sqlite3.Error as error:
+    print(f"Yield disease history error: {redact_configured_credentials(error)}")
+    return []
+
+
+def render_yield_dashboard(user_id):
+  st.session_state.pop("yield_report_summary", None)
+  st.session_state.pop("yield_report_crop", None)
+  if st.session_state.get("yield_crop") not in YIELD_CROPS:
+    st.session_state.pop("yield_crop", None)
+  st.subheader(tr("Multi-season yield prediction and analytics"))
+  st.caption(tr("Use measured harvests and your saved disease history for transparent planning estimates. Estimates are not guaranteed yields or a calibrated crop model."))
+  with st.form("yield_observation_form"):
+    crop_col, season_col, year_col = st.columns(3)
+    crop = crop_col.selectbox(tr("Crop"), YIELD_CROPS, key="yield_crop", format_func=tr)
+    season = season_col.selectbox(tr("Harvest season"), YIELD_SEASONS, key="yield_season", format_func=tr)
+    year = year_col.number_input(tr("Harvest year"), min_value=2000, max_value=datetime.now().year + 1, value=datetime.now().year, step=1)
+    value_col, irrigation_col = st.columns(2)
+    observed_yield = value_col.number_input(tr("Observed yield (quintals per hectare)"), min_value=0.1, max_value=1000.0, value=10.0, step=0.5)
+    irrigation = irrigation_col.selectbox(tr("Irrigation status"), ("Rain-fed", "Supplemental", "Irrigated", "Unknown"), format_func=tr)
+    soil_note = st.text_input(tr("Optional soil observation"), max_chars=500, help=tr("Record a measured observation or soil-test result; leave blank if unknown."))
+    saved = st.form_submit_button(tr("Save harvest record"), type="primary")
+  if saved:
+    if save_yield_observation(user_id, crop, season, year, observed_yield, irrigation, soil_note):
+      st.success(tr("Harvest record saved."))
+      st.rerun()
+    else:
+      st.error(tr("Could not save this harvest record. Check the values and try again."))
+
+  observations = load_yield_observations(user_id, crop)
+  target_season = st.selectbox(
+      tr("Season to plan for"), YIELD_SEASONS,
+      key="yield_target_season", format_func=tr,
+  )
+  same_season_observations = [row for row in observations if row["season"] == target_season]
+  model_observations = same_season_observations or observations
+  disease_rows = load_user_disease_season_counts(user_id, crop)
+  today = datetime.now(ZoneInfo("Africa/Addis_Ababa")).replace(tzinfo=None)
+  recent_disease_count = 0
+  for timestamp, _details in disease_rows:
+    recorded_at = _parse_case_datetime(timestamp)
+    if recorded_at and today - timedelta(days=365) <= recorded_at <= today + timedelta(days=1):
+      recent_disease_count += 1
+
+  prefs = load_user_alert_preferences(user_id)
+  coordinates = (prefs.get("latitude"), prefs.get("longitude"))
+  if not all(point is not None for point in coordinates):
+    coordinates = coordinates_for_case_location(prefs.get("location_name") or "Dilla, Ethiopia")
+  current_weather = {}
+  forecast_rain_total = None
+  if coordinates:
+    try:
+      weather_data = fetch_open_meteo_forecast(*coordinates)
+      current_weather = weather_data.get("current", {})
+      forecast_rain_total = sum(float(value or 0) for value in weather_data.get("daily", {}).get("precipitation_sum", []))
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+      current_weather = {}
+  reference_col, location_col = st.columns(2)
+  reference_yield = reference_col.number_input(
+      tr("Reference yield if no harvests are recorded (quintals per hectare)"),
+      min_value=0.0, max_value=1000.0, value=0.0, step=0.5,
+      help=tr("Use a local extension estimate or your own reference; zero means no estimate can be calculated yet."),
+      key="yield_reference_input",
+  )
+  location_col.caption(f"{tr('Local weather context')}: {prefs.get('location_name') or 'Dilla, Ethiopia'}")
+  model = estimate_yield_scenarios(
+      model_observations, recent_disease_count,
+      {
+          "reference_yield": reference_yield,
+          "rain_mm": forecast_rain_total,
+          "humidity": current_weather.get("relative_humidity_2m"),
+      },
+  )
+  if same_season_observations:
+    model["source"] = "farmer-recorded matching-season history"
+  if model["baseline"] <= 0:
+    st.info(tr("Add a measured harvest or local reference yield to calculate a planning estimate."))
+  else:
+    metric_cols = st.columns(3)
+    metric_cols[0].metric(tr("Baseline yield"), format_yield_amount(model["baseline"]))
+    metric_cols[1].metric(tr("Recent disease records"), str(recent_disease_count))
+    metric_cols[2].metric(tr("Next-season planning estimate"), format_yield_amount(model["estimate"]))
+    st.caption(tr("Estimate source: {source}. Planning adjustment: disease {disease:.0f}% · current weather {weather:.0f}%. Open-Meteo current conditions are not a seasonal forecast.").format(
+        source=tr(model["source"]), disease=model["disease_penalty"] * 100,
+        weather=model["weather_penalty"] * 100,
+    ))
+    st.dataframe(
+        [{tr("Season outlook"): tr(label), tr("Estimated yield (quintals per hectare)"): format_yield_amount(value)} for label, value in model["scenarios"]],
+        hide_index=True, width="stretch",
+    )
+    summary = (
+        f"{crop}: {model['estimate']:.1f} q/ha planning estimate from {model['source']}; "
+        f"recent disease records: {recent_disease_count}; current-weather adjustment: {model['weather_penalty'] * 100:.0f}%."
+    )
+    st.session_state["yield_report_summary"] = summary
+    st.session_state["yield_report_crop"] = crop
+    if current_weather:
+      st.caption(tr("Current conditions") + f": {current_weather.get('temperature_2m', '—')} °C · {current_weather.get('relative_humidity_2m', '—')}% RH · {current_weather.get('precipitation', '—')} mm rain.")
+    if forecast_rain_total is not None:
+      st.caption(tr("Three-day rainfall outlook") + f": {forecast_rain_total:.1f} mm. " + tr("This short-range signal is used only as a cautious planning adjustment, not a seasonal forecast."))
+  st.markdown(f"### {tr('Recorded season history')}")
+  if observations:
+    st.dataframe([
+        {tr("Crop"): tr(row["crop"]), tr("Season"): f"{tr(row['season'])} {row['year']}", tr("Observed yield (quintals per hectare)"): format_yield_amount(row["yield_q_ha"]), tr("Irrigation status"): tr(row["irrigation"]), tr("Soil observation"): row["soil"] or tr("Not recorded")}
+        for row in observations
+    ], hide_index=True, width="stretch")
+  else:
+    st.info(tr("No harvest records are saved for this crop yet."))
+  if observations and not same_season_observations:
+    st.caption(tr("No harvest record matches the selected planning season; the estimate uses your recent records from other seasons."))
+  st.markdown(f"### {tr('Season planning and soil health')}")
+  st.write(tr("Compare harvests from the same crop and season. Record soil-test pH, organic matter and nutrient results when available; soil health cannot be inferred from disease records or weather alone."))
+  irrigation_statuses = sorted({row["irrigation"] for row in observations if row.get("irrigation") != "Unknown"})
+  st.caption(tr("Irrigation represented in saved harvests") + ": " + (", ".join(tr(item) for item in irrigation_statuses) if irrigation_statuses else tr("Not recorded")))
+  if "Rain-fed" in irrigation_statuses:
+    st.info(tr("For rain-fed seasons, compare planting dates with local rainfall onset and keep a contingency plan for dry spells."))
+  elif "Irrigated" in irrigation_statuses or "Supplemental" in irrigation_statuses:
+    st.info(tr("For irrigated seasons, check water availability, system condition and soil moisture before scheduling applications."))
+  if recent_disease_count:
+    st.warning(tr("Review the recent disease cases with an extension worker and include locally appropriate sanitation and rotation in the next season plan."))
+  else:
+    st.info(tr("No matching disease cases were found in the past year. Continue scouting and record harvests to improve future comparisons."))
+
+
 PDF_DOWNLOAD_LABEL = "📥 Download official PDF prescription / የሕክምና ማዘዣ ፒዲኤፍ አውርድ"
 
 
@@ -2454,6 +3081,7 @@ def build_prescription_pdf(case_record, user_record=None):
   audit_notes = value("Audit Notes") if expert_record else value("audit_notes")
   audited_by = value("Audited By") if expert_record else value("audited_by")
   audited_at = value("Audited At") if expert_record else value("audited_at")
+  yield_summary = value("Yield Summary", "No yield planning estimate is available. Record a harvest and visit Yield Analytics to calculate one.")
 
   font_dir = Path(__file__).resolve().parent / "assets" / "fonts"
   regular_path = font_dir / "NotoSansEthiopic-Regular.ttf"
@@ -2590,6 +3218,9 @@ def build_prescription_pdf(case_record, user_record=None):
       para(f"የባህላዊ መከላከያ መመሪያ: {mitigation_am or 'አልተመዘገበም'}"),
       para("Chemical use safeguard: No pesticide rate is created by this report. Use a chemical only when an agricultural expert confirms it is appropriate and locally registered for this crop and disease. Follow the current product label, required PPE, re-entry interval, and pre-harvest interval.", small_style),
       para("የኬሚካል ደህንነት: ይህ ሪፖርት የፀረ-ተባይ መጠን አይመክርም። ኬሚካል በግብርና ባለሙያ ሲረጋገጥ፣ ለዚህ ሰብልና በሽታ በአካባቢው የተመዘገበ ሲሆን ብቻ ይጠቀሙ፤ የምርቱን መለያ፣ PPE እና የመከር ጊዜ መጠበቂያ ይከተሉ።", small_style),
+      section("Yield planning estimate / የምርት እቅድ ግምት"),
+      para(yield_summary),
+      para("This planning estimate uses farmer-recorded yields, saved disease reports and current weather context when available. It is not a guarantee, formal crop insurance figure, or seasonal weather forecast.", small_style),
       section("Official verification / ኦፊሴላዊ ማረጋገጫ"),
   ])
   if audited_by:
@@ -2621,7 +3252,14 @@ def build_prescription_pdf(case_record, user_record=None):
 
 def render_pdf_download(case_record, user_record=None, key="prescription_pdf"):
   try:
-    pdf_data = build_prescription_pdf(case_record, user_record)
+    report_record = dict(case_record)
+    if user_record:
+      record_crop = extract_saved_field(report_record.get("details"), "Crop", "")
+      if st.session_state.get("yield_report_crop", "").casefold() == record_crop.casefold():
+        report_record["Yield Summary"] = st.session_state.get("yield_report_summary", "")
+      else:
+        report_record["Yield Summary"] = "No same-crop planning estimate is available. Record harvests for this crop in Yield Analytics."
+    pdf_data = build_prescription_pdf(report_record, user_record)
   except Exception as error:
     st.error(tr("Could not prepare the PDF report: {error}").format(error=error))
     return
@@ -2662,10 +3300,28 @@ def _distance_km(point_a, point_b):
   return 6371 * 2 * asin(sqrt(min(1.0, value)))
 
 
-def find_nearby_same_disease_cases(location, pathology, current_user_id, days=30, radius_km=50):
+def _community_treatment_advice(summary, pathology):
+  """Extract farmer-facing treatment text without exposing expert/private fields."""
+  text = str(summary or "")
+  treatment_match = re.search(
+      r"(?:💊\s*)?Treatment\s*\n(.*?)(?=\n\s*(?:🛡️|Prevention|🚨|Important Warning|📋|Action Plan)|\Z)",
+      text, re.IGNORECASE | re.DOTALL,
+  )
+  if treatment_match:
+    advice = re.sub(r"<[^>]+>", " ", treatment_match.group(1))
+    advice = re.sub(r"\s+", " ", advice).strip(" -*#\n")
+    if advice and "ALERT_METADATA" not in advice:
+      return advice[:420]
+  return (
+      f"{pathology}: isolate visibly affected plants where practical, avoid moving wet plant material, "
+      "and ask a local extension expert to confirm the diagnosis and locally registered treatment before applying chemicals."
+  )
+
+
+def find_nearby_same_disease_cases(location, pathology, current_user_id, days=30, radius_km=50, current_point=None):
   """Return one anonymous, recent same-pathology report per nearby farmer."""
   disease_key = _normalized_pathology(pathology)
-  current_point = coordinates_for_case_location(location)
+  current_point = current_point or coordinates_for_case_location(location)
   current_locality = _locality_key(location)
   if not disease_key or not current_locality:
     return []
@@ -2676,7 +3332,9 @@ def find_nearby_same_disease_cases(location, pathology, current_user_id, days=30
                     crop_pathology_details, COALESCE(detected_pathology, ''),
                     timestamp,
                     COALESCE(case_status, 'Pending'),
-                    COALESCE(treatment_assessment, 'Not reviewed')
+                    COALESCE(treatment_assessment, 'Not reviewed'),
+                    COALESCE(case_ref, ''), latitude, longitude,
+                    COALESCE(ai_summary, result_text, '')
              FROM analyses
              WHERE UPPER(COALESCE(crop_pathology_details, '')) LIKE '%STATUS: DISEASE%'
                AND COALESCE(user_id, '') != ?
@@ -2691,7 +3349,7 @@ def find_nearby_same_disease_cases(location, pathology, current_user_id, days=30
   cutoff = now - timedelta(days=days)
   seen_farmers = set()
   nearby = []
-  for farmer_id, case_location, details, detected_pathology, timestamp, status, assessment in rows:
+  for farmer_id, case_location, details, detected_pathology, timestamp, status, assessment, case_ref, latitude, longitude, summary in rows:
     saved_pathology = str(detected_pathology or "").strip() or extract_saved_field(
         details, "Pathology (English)", ""
     )
@@ -2701,10 +3359,12 @@ def find_nearby_same_disease_cases(location, pathology, current_user_id, days=30
     if not reported_at or reported_at < cutoff or reported_at > now + timedelta(days=1):
       continue
     saved_locality = _locality_key(case_location)
-    other_point = coordinates_for_case_location(case_location)
+    other_point = (latitude, longitude) if latitude is not None and longitude is not None else coordinates_for_case_location(case_location)
     same_city = bool(current_locality and current_locality == saved_locality)
     distance = _distance_km(current_point, other_point) if current_point and other_point else None
-    if not same_city and (distance is None or distance > radius_km):
+    # Do not treat matching city labels as proof of proximity: the feed is
+    # distance-bounded and reports without mappable coordinates are omitted.
+    if distance is None or distance > radius_km:
       continue
     farmer_key = str(farmer_id or "").strip()
     if not farmer_key or farmer_key in seen_farmers:
@@ -2713,6 +3373,16 @@ def find_nearby_same_disease_cases(location, pathology, current_user_id, days=30
     nearby.append({
         "Location": str(case_location or "Unknown location"),
         "Pathology": saved_pathology,
+        "Pathology am": extract_saved_field(details, "Pathology (Amharic)", ""),
+        "Severity": extract_saved_field(details, "Severity", "High"),
+        "Case Ref": str(case_ref or "")[-6:],
+        "Distance km": round(distance, 1) if distance is not None else None,
+        "Advice": _community_treatment_advice(summary, saved_pathology),
+        "Advice am": " ".join(filter(None, (
+            extract_saved_field(details, "Treatment directive (Amharic)", ""),
+            extract_saved_field(details, "Mitigation directive (Amharic)", ""),
+        ))),
+        "Coordinates": other_point,
         "Timestamp": str(timestamp or ""),
         "Reported at": reported_at,
         "Days ago": max(0, (now.date() - reported_at.date()).days),
@@ -2722,11 +3392,11 @@ def find_nearby_same_disease_cases(location, pathology, current_user_id, days=30
   return nearby
 
 
-def render_community_insights(location, pathology, current_user_id, case_ref, timestamp):
+def render_community_insights(location, pathology, current_user_id, case_ref, timestamp, current_point=None):
   """Show anonymous local activity and an interactive farmer-facing map."""
   st.markdown(f"### {tr('Community disease activity')}")
   community_cases = find_nearby_same_disease_cases(
-      location, pathology, current_user_id
+      location, pathology, current_user_id, current_point=current_point
   )
   recent_count = sum(case["Days ago"] < 7 for case in community_cases)
   active_count = sum(case["Status"] in ("Pending", "In Progress", "Escalated") for case in community_cases)
@@ -2753,8 +3423,34 @@ def render_community_insights(location, pathology, current_user_id, case_ref, ti
     if not matched_audits and not revision_audits:
       st.caption(tr("No audit notes recorded."))
 
+  if community_cases:
+    st.markdown(f"#### {tr('Detailed nearby outbreak reports')}")
+    for case in community_cases:
+      distance_label = (
+          f"{case['Distance km']:.1f} {tr('km away')}" if case["Distance km"] is not None
+          else tr("Distance unavailable; location is approximate")
+      )
+      pathology_label = case["Pathology"]
+      advice_label = case["Advice"]
+      if st.session_state.get("lang") == "am":
+        pathology_am = str(case.get("Pathology am") or "").strip()
+        if pathology_am.casefold() in ("none", "unknown", "not specified", "not recorded"):
+          pathology_am = ""
+        pathology_label = pathology_am or tr("Pathology translation unavailable")
+        advice_label = case.get("Advice am") or tr(
+            "Apply locally approved treatment only after expert confirmation. Remove heavily affected plants where appropriate, avoid overhead watering, and sanitize tools."
+        )
+      severity_match = re.search(r"\b(CRITICAL|HIGH|MODERATE|MEDIUM)\b", str(case["Severity"]).upper())
+      severity_level = severity_match.group(1) if severity_match else "HIGH"
+      severity_label = tr(f"{severity_level} severity")
+      with st.container(border=True):
+        st.markdown(f"**{html.escape(pathology_label)} — {html.escape(severity_label)}**")
+        st.write(f"📍 {html.escape(case['Location'])} · {distance_label}")
+        st.caption(f"{tr('Reported')}: {html.escape(case['Timestamp'])} · {tr('Case reference')}: #{html.escape(case['Case Ref'] or 'Unavailable')}")
+        st.write(f"**{tr('Actionable agronomic advice')}:** {html.escape(advice_label)}")
+
   map_rows = []
-  own_point = coordinates_for_case_location(location)
+  own_point = current_point or coordinates_for_case_location(location)
   if own_point:
     map_rows.append({
         "position": [own_point[1], own_point[0]],
@@ -2767,7 +3463,7 @@ def render_community_insights(location, pathology, current_user_id, case_ref, ti
     })
   skipped_count = 0
   for case in community_cases:
-    point = coordinates_for_case_location(case["Location"])
+    point = case.get("Coordinates") or coordinates_for_case_location(case["Location"])
     if not point:
       skipped_count += 1
       continue
@@ -2818,19 +3514,130 @@ def render_community_insights(location, pathology, current_user_id, case_ref, ti
   )
 
 
+def render_expert_broadcast_center():
+  st.subheader(tr("WhatsApp and bulk SMS broadcast center"))
+  st.caption(tr("Send extension advisories only to farmers who separately opted in to the selected channel. Recipient phone numbers are never displayed here."))
+  channel = st.selectbox(tr("Broadcast channel"), ("SMS", "WhatsApp"), key="broadcast_channel")
+  location_filter = st.text_input(
+      tr("Location or district filter (leave blank for all opted-in locations)"),
+      max_chars=120, key="broadcast_location_filter",
+  ).strip()
+  recipients = load_broadcast_recipients(channel, location_filter)
+  recipient_count = len(recipients)
+  st.metric(tr("Eligible recipients (maximum 50 per broadcast)"), recipient_count)
+  sms_config = get_sms_provider_config() if channel == "SMS" else None
+  whatsapp_config = get_whatsapp_broadcast_config() if channel == "WhatsApp" else None
+  provider_ready = (sms_config["provider"] != "mock") if sms_config else whatsapp_config["ready"]
+  if provider_ready:
+    st.success(tr("Selected delivery provider is configured."))
+  else:
+    st.warning(tr("Delivery is disabled until the selected provider is configured in Streamlit Secrets."))
+  if channel == "WhatsApp":
+    st.info(tr("WhatsApp broadcasts use an approved Twilio Content Template. Configure TWILIO_WHATSAPP_FROM and TWILIO_WHATSAPP_CONTENT_SID; the approved template must contain one variable for the message body."))
+  with st.form("extension_broadcast_form"):
+    message = st.text_area(
+        tr("Advisory message (Amharic first, then English)"),
+        max_chars=480 if channel == "SMS" else 1000, height=170,
+        help=tr("Include the affected location, dates, and practical advice. Do not include farmer names or private case details."),
+    )
+    confirm_dispatch = st.checkbox(tr("I have reviewed this advisory and confirm that it may be sent to the opted-in recipients above."))
+    submit_broadcast = st.form_submit_button(tr("Dispatch broadcast"), type="primary", disabled=not provider_ready or recipient_count == 0)
+  if submit_broadcast:
+    if not confirm_dispatch:
+      st.error(tr("Confirm the broadcast before dispatch."))
+    elif not message.strip():
+      st.error(tr("Enter a message before dispatch."))
+    else:
+      with st.spinner(tr("Dispatching messages…")):
+        result = dispatch_extension_broadcast(channel, location_filter, message.strip())
+      if result["error"] == "provider_unconfigured":
+        st.error(tr("Delivery is disabled until the selected provider is configured in Streamlit Secrets."))
+      elif result["error"] == "no_recipients":
+        st.warning(tr("No farmers have opted in to this channel at the selected location."))
+      elif result["error"]:
+        st.error(tr("The broadcast could not be dispatched. Check the message and database, then try again."))
+      else:
+        st.success(tr("Broadcast finished: {sent} sent, {failed} failed.").format(sent=result["sent"], failed=result["failed"]))
+  st.caption(tr("Delivery results and the campaign text are saved in the protected SQLite database for extension audit."))
+  with st.expander(tr("Recent broadcast history"), expanded=False):
+    history = load_recent_broadcasts()
+    if history:
+      st.dataframe([
+          {tr("Campaign"): row[0], tr("Broadcast channel"): row[1], tr("Location filter"): row[2] or tr("All locations"), tr("Message"): row[3], tr("Date"): row[4], tr("Sent"): row[5] or 0, tr("Failed"): row[6] or 0}
+          for row in history
+      ], hide_index=True, width="stretch")
+    else:
+      st.info(tr("No broadcast campaigns have been sent yet."))
+
+
+def render_expert_yield_analytics():
+  st.subheader(tr("Regional multi-season yield analytics"))
+  st.caption(tr("Aggregated harvest records are shown without farmer names, IDs, phone numbers, or exact farm coordinates."))
+  try:
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+      rows = conn.execute(
+          """SELECT crop, season, season_year, COUNT(*), AVG(yield_quintals_ha),
+                    GROUP_CONCAT(DISTINCT irrigation_status)
+               FROM yield_observations
+               GROUP BY crop, season, season_year ORDER BY season_year, crop"""
+      ).fetchall()
+      disease_count = conn.execute(
+          """SELECT COUNT(*) FROM analyses
+               WHERE UPPER(COALESCE(crop_pathology_details, '')) LIKE '%STATUS: DISEASE%'"""
+      ).fetchone()[0]
+  except sqlite3.Error as error:
+    st.error(tr("Yield records could not be loaded."))
+    print(f"Expert yield analytics error: {redact_configured_credentials(error)}")
+    return
+  st.metric(tr("Confirmed disease records"), disease_count)
+  weather_city = st.selectbox(
+      tr("Regional weather location"),
+      tuple(ETHIOPIAN_CITY_COORDINATES.keys()),
+      format_func=lambda value: value.title(),
+      key="expert_yield_weather_city",
+  )
+  regional_point = ETHIOPIAN_CITY_COORDINATES[weather_city]
+  try:
+    regional_weather = fetch_open_meteo_forecast(*regional_point)
+    regional_current = regional_weather["current"]
+    regional_rain = sum(float(value or 0) for value in regional_weather["daily"].get("precipitation_sum", []))
+    weather_cols = st.columns(3)
+    weather_cols[0].metric(tr("Regional temperature"), f"{regional_current.get('temperature_2m', '—')} °C")
+    weather_cols[1].metric(tr("Regional humidity"), f"{regional_current.get('relative_humidity_2m', '—')}%")
+    weather_cols[2].metric(tr("Rain forecast · next 3 days"), f"{regional_rain:.1f} mm")
+  except (requests.RequestException, ValueError, KeyError, TypeError):
+    st.info(tr("Live regional weather is unavailable right now."))
+  if not rows:
+    st.info(tr("Farmer harvest records will appear here after they are entered in Yield Analytics."))
+    return
+  st.dataframe([
+      {tr("Crop"): row[0], tr("Season"): f"{tr(row[1])} {row[2]}", tr("Farm records"): row[3],
+       tr("Average observed yield (quintals per hectare)"): round(row[4], 1),
+       tr("Irrigation systems reported"): row[5] or tr("Not recorded")}
+      for row in rows
+  ], hide_index=True, width="stretch")
+  st.caption(tr("These are descriptive averages of submitted records, not a representative regional survey or official production statistics."))
+
+
 def render_expert_dashboard():
   expert_cases = load_expert_cases()
   total, active, resolved = load_expert_kpi_counts()
   render_kpi_row(total, active, resolved, "Review field conditions")
   expert_section = st.radio(
       tr("Expert portal section"),
-      ("Case Management", "🗺️ Disease Outbreak GIS Map (የበሽታ ስርጭት ካርታ)"),
+      ("Case Management", "Yield Analytics", "Broadcast Center", "🗺️ Disease Outbreak GIS Map (የበሽታ ስርጭት ካርታ)"),
       horizontal=True,
       format_func=tr,
       key="expert_portal_section",
   )
   if expert_section.startswith("🗺️"):
     render_disease_outbreak_map(expert_cases)
+    return
+  if expert_section == "Yield Analytics":
+    render_expert_yield_analytics()
+    return
+  if expert_section == "Broadcast Center":
+    render_expert_broadcast_center()
     return
 
   st.subheader(tr("Expert case management"))
@@ -3056,21 +3863,63 @@ st.markdown(
     '<header class="agri-navbar"><div class="agri-brand">Agre AI Crop Health Services</div></header>',
     unsafe_allow_html=True,
 )
-nav_items = ("Home", "About", "Detect", "Irrigation Advisory", "Marketplace", "Chatbot", "Pricing", "Contact")
-nav_columns = st.columns(8, gap="small")
-for nav_col, nav_item in zip(nav_columns, nav_items):
-  if nav_col.button(tr(nav_item), key=f"main_nav_{nav_item.lower()}", width="stretch"):
-    if st.session_state["auth_user"] is None:
-      if nav_item in ("Detect", "Chatbot", "Irrigation Advisory"):
-        st.session_state["workspace_requested"] = nav_item
-        st.session_state["agri_view"] = "login"
-        st.session_state["auth_mode_login"] = "Login"
-      else:
-        st.session_state["public_section"] = nav_item
-        st.session_state["agri_view"] = "home"
+navigation_labels = {
+    "Home": "🏠 መነሻ ገጽ (Home)",
+    "Detect": "🌱 ሰልብ ምርመራ (Crop Diagnosis)",
+    "Chatbot": "🤖 AI አግሮኖሚስት (AI Chatbot)",
+    "Irrigation Advisory": "🌤️ ስማርት መስኖ (Smart Irrigation)",
+    "Map": "📍 የቦታዎች እና ክልሎች ካርታ (Interactive Map)",
+    "Marketplace": "🛒 አግሮ-ቬት ገበያ (Agro-Vet Market)",
+    "Yield Analytics": "📊 የምርት ትንተና (Yield Analytics)",
+    "History": "📜 ታሪክ እና ማስታወሻ (History)",
+    "About": "ℹ️ ስለ አፑ (About)",
+    "Pricing": "💳 የክፍያ አማራጮች (Pricing)",
+    "Contact": "📞 እውቂያ (Contact)",
+}
+current_navigation = (
+    st.session_state.get("workspace_section", "Detect")
+    if st.session_state["auth_user"] is not None
+    else st.session_state.get("public_section", "Home")
+)
+if current_navigation not in navigation_labels:
+  current_navigation = "Home" if st.session_state["auth_user"] is None else "Detect"
+navigation_keys = list(navigation_labels)
+if (
+    st.session_state.get("agri_view") not in ("login", "register")
+    and st.session_state.get("agre_ai_sidebar_navigation") != current_navigation
+):
+  st.session_state["agre_ai_sidebar_navigation"] = current_navigation
+
+
+def _navigate_from_sidebar():
+  destination = st.session_state.get("agre_ai_sidebar_navigation", "Home")
+  if st.session_state.get("auth_user") is None:
+    if destination in ("Detect", "Chatbot", "Irrigation Advisory", "Yield Analytics", "History"):
+      st.session_state["workspace_requested"] = destination
+      st.session_state["agri_view"] = "login"
+      st.session_state["auth_mode_login"] = "Login"
     else:
-      st.session_state["workspace_section"] = nav_item
-    st.rerun()
+      st.session_state["public_section"] = destination
+      st.session_state["agri_view"] = "home"
+  else:
+    st.session_state["workspace_section"] = destination
+
+
+with st.sidebar:
+  st.image("https://img.icons8.com/color/96/agronomy.png", width=80, alt="Agre AI agriculture logo")
+  st.title("Agre AI Hub")
+  st.markdown("---")
+  selected_navigation = st.radio(
+      "Navigation",
+      options=navigation_keys,
+      format_func=lambda section: navigation_labels[section],
+      index=navigation_keys.index(current_navigation),
+      key="agre_ai_sidebar_navigation",
+      on_change=_navigate_from_sidebar,
+      label_visibility="collapsed",
+  )
+  st.markdown("---")
+  st.caption("© 2026 Agre AI Services\nAll rights reserved.")
 
 control_col, theme_col, action_col = st.columns([1.1, 1, 2.6], vertical_alignment="center")
 with control_col:
@@ -3148,8 +3997,18 @@ if st.session_state["auth_user"] is None and st.session_state["agri_view"] not i
       st.session_state["workspace_requested"] = "Irrigation Advisory"
       st.session_state["agri_view"] = "login"
       st.rerun()
+  elif public_section == "Yield Analytics":
+    st.markdown(f'<section class="agri-section"><h1>{tr("Multi-season yield prediction and analytics")}</h1><p>{tr("Sign in to record your harvests and view private yield planning analytics based on your disease history and local weather.")}</p></section>', unsafe_allow_html=True)
+    if st.button(tr("Open sign-in"), type="primary", key="public_yield_login"):
+      st.session_state["workspace_requested"] = "Yield Analytics"
+      st.session_state["agri_view"] = "login"
+      st.rerun()
   elif public_section == "Marketplace":
     render_marketplace_page(public=True)
+  elif public_section == "Map":
+    st.subheader("🗺️ Dilla crop health map")
+    st.caption(tr("Map locations are approximate city-level positions. Other farmers’ names, phone numbers, and case references are not shown."))
+    render_disease_outbreak_map(load_public_disease_map_cases(), public=True)
   elif public_section == "Pricing":
     st.markdown(f'<section class="agri-section"><h1>{tr("Pricing")}</h1><h2>{tr("100% free for smallholder farmers")}</h2><p>{tr("There is no subscription fee for smallholder farmers. Create an account to use crop diagnosis, weather context, and saved case history.")}</p></section>', unsafe_allow_html=True)
   elif public_section == "Contact":
@@ -3243,9 +4102,19 @@ if st.sidebar.button(tr("Log out"), type="primary", key="sidebar_logout", width=
   st.rerun()
 
 workspace_section = st.session_state.get("workspace_section", "Detect")
-if workspace_section not in ("Home", "About", "Pricing", "Contact", "Detect", "Irrigation Advisory", "Chatbot", "History", "Marketplace"):
+if workspace_section not in ("Home", "About", "Pricing", "Contact", "Detect", "Yield Analytics", "Irrigation Advisory", "Chatbot", "History", "Marketplace", "Map"):
   workspace_section = "Detect"
   st.session_state["workspace_section"] = workspace_section
+
+if workspace_section == "Yield Analytics":
+  render_yield_dashboard(user_id)
+  st.stop()
+
+if workspace_section == "Map":
+  st.subheader("🗺️ Dilla crop health map")
+  st.caption(tr("Map locations are approximate city-level positions. Other farmers’ names, phone numbers, and case references are not shown."))
+  render_disease_outbreak_map(load_public_disease_map_cases(), public=True)
+  st.stop()
 
 if workspace_section == "Irrigation Advisory":
   st.subheader(tr("Smart irrigation and weather advisory"))
@@ -3348,9 +4217,13 @@ if workspace_section == "Chatbot":
 
   chat_user_cases = load_diagnoses_from_db(user_id)
   preference = load_user_alert_preferences(user_id)
-  chat_location = preference.get("location_name") or "Dilla, Ethiopia"
+  chat_location = (
+      st.session_state.get("current_location_name")
+      or preference.get("location_name")
+      or "Dilla, Ethiopia"
+  )
   chat_weather = "Live weather is unavailable."
-  chat_coordinates = (
+  chat_coordinates = st.session_state.get("farmer_precise_location") or (
       preference.get("latitude"), preference.get("longitude")
   )
   if not all(value is not None for value in chat_coordinates):
@@ -3393,6 +4266,7 @@ if workspace_section == "Chatbot":
       tr("Ask the agricultural assistant by voice (Amharic or English)"),
       key=f"agronomist_chat_audio_{st.session_state['auth_session_id']}",
   )
+  st.caption(tr("Speak in Amharic or English. The transcript stays in the original language; review and edit it before submitting."))
   voice_question = None
   if chat_audio_file is not None:
     audio_bytes = chat_audio_file.read()
@@ -3407,6 +4281,7 @@ if workspace_section == "Chatbot":
             )
             st.session_state["agronomist_voice_review"] = transcription["transcription"]
             st.session_state["agronomist_voice_language"] = transcription["language"]
+            st.session_state["agronomist_voice_uncertain"] = transcription["uncertain_spans"]
           except Exception as error:
             st.session_state["agronomist_voice_error"] = gemini_error_message(error)
       else:
@@ -3418,6 +4293,11 @@ if workspace_section == "Chatbot":
       st.caption(tr("Detected speech language: {language}").format(
           language=st.session_state.get("agronomist_voice_language", "Unclear")
       ))
+      uncertain_spans = st.session_state.get("agronomist_voice_uncertain", [])
+      if uncertain_spans:
+        st.warning(tr("Speech recognition may be uncertain in the marked spans. Check the recording and edit the transcript before sending.") + " " + ", ".join(uncertain_spans))
+      else:
+        st.caption(tr("No uncertain spans were reported. Review the transcript before sending."))
       st.text_area(
           tr("Review or correct the transcript before sending"),
           key="agronomist_voice_review",
@@ -3505,9 +4385,9 @@ if workspace_section in ("Home", "About", "Pricing", "Contact", "Marketplace"):
   st.stop()
 
 
-workspace_sections = ("Detect", "Chatbot", "History")
-workspace_labels = ("🌱 Detect & diagnosis", "💬 Chatbot", "📊 My History & Prescriptions")
-section_cols = st.columns(3, gap="small")
+workspace_sections = ("Detect", "Yield Analytics", "Chatbot", "History")
+workspace_labels = ("🌱 Detect & diagnosis", "Yield Analytics", "💬 Chatbot", "📊 My History & Prescriptions")
+section_cols = st.columns(4, gap="small")
 for section_col, section_name, section_label in zip(section_cols, workspace_sections, workspace_labels):
   if section_col.button(tr(section_label), key=f"workspace_nav_{section_name.lower()}", width="stretch"):
     st.session_state["workspace_section"] = section_name
@@ -3525,21 +4405,82 @@ if workspace_section in ("Detect", "Chatbot"):
   # --------------------------------------------------
   st.subheader(tr("📍 Location and current weather"))
   alert_preferences = load_user_alert_preferences(user_id)
-
-  user_city_input = st.text_input(
-      tr("Search for a city in English (for example: Addis Ababa, Nairobi, or London):"),
-      value=alert_preferences.get("location_name") or "Addis Ababa",
+  _BROWSER_LOCATION(
+      key="agre_ai_browser_location_state",
+      data={
+          "location": st.session_state.get("agre_ai_browser_location_state", {}).get("location"),
+          "status": st.session_state.get("agre_ai_browser_location_state", {}).get("status"),
+      },
   )
+  browser_location_state = st.session_state.get("agre_ai_browser_location_state", {})
+  browser_location = browser_location_state.get("location") or {}
+  gps_coordinates = None
+  try:
+    gps_latitude = float(browser_location.get("latitude"))
+    gps_longitude = float(browser_location.get("longitude"))
+    if -90 <= gps_latitude <= 90 and -180 <= gps_longitude <= 180:
+      gps_coordinates = (gps_latitude, gps_longitude)
+  except (TypeError, ValueError):
+    pass
+
+  location_choices = (
+      "My browser location (GPS)", "Dilla", "Hawassa", "Yirgalem", "Addis Ababa",
+      "Adama", "Arba Minch", "Wolaita Sodo", "Shashemene", "Jimma", "Bule Hora",
+      "Dire Dawa", "Bahir Dar", "Gondar", "Mekelle", "Harar", "Other location",
+  )
+  saved_city = str(alert_preferences.get("location_name") or "Dilla").strip()
+  saved_match = next(
+      (choice for choice in location_choices if choice.casefold() == saved_city.casefold()),
+      "Dilla",
+  )
+  if gps_coordinates and not st.session_state.get("location_city_manually_selected"):
+    st.session_state["weather_city_override"] = "My browser location (GPS)"
+  elif "weather_city_override" not in st.session_state:
+    st.session_state["weather_city_override"] = saved_match
+  selected_location = st.selectbox(
+      tr("Choose your location (detected automatically when permitted)"),
+      location_choices,
+      key="weather_city_override",
+      on_change=mark_location_override,
+      help=tr("Your browser may ask permission to share your location. You can choose a city manually at any time."),
+  )
+  if selected_location == "My browser location (GPS)" and gps_coordinates:
+    selected_city_name = "Your GPS location"
+    selected_location_latitude, selected_location_longitude = gps_coordinates
+  elif selected_location == "Other location":
+    user_city_input = st.text_input(
+        tr("Search for a city in English (for example: Addis Ababa, Nairobi, or London):"),
+        value=saved_city if saved_match == "Dilla" and saved_city.casefold() != "dilla" else "",
+        key="other_weather_location",
+    )
+    selected_city_name = user_city_input.strip() or "Dilla"
+    other_coordinates = coordinates_for_case_location(selected_city_name)
+    if other_coordinates:
+      selected_location_latitude, selected_location_longitude = other_coordinates
+    else:
+      selected_location_latitude = selected_location_longitude = None
+  else:
+    selected_city_name = "Dilla" if selected_location == "My browser location (GPS)" else selected_location
+    selected_location_latitude, selected_location_longitude = coordinates_for_case_location(selected_city_name)
+
+  if selected_location_latitude is not None and selected_location_longitude is not None:
+    st.session_state["farmer_precise_location"] = (
+        selected_location_latitude, selected_location_longitude
+    )
+  st.session_state["current_location_name"] = selected_city_name
+  if not gps_coordinates:
+    st.caption(tr("Browser location is unavailable. You can select a city manually; Dilla is the default."))
 
   weather = {}
   weather_available = False
-  selected_location_latitude = None
-  selected_location_longitude = None
-  selected_city_name = user_city_input.strip()
 
   if selected_city_name:
     try:
-      city_coordinates = coordinates_for_case_location(selected_city_name)
+      city_coordinates = (
+          (selected_location_latitude, selected_location_longitude)
+          if selected_location_latitude is not None and selected_location_longitude is not None
+          else coordinates_for_case_location(selected_city_name)
+      )
       if city_coordinates:
         selected_location_latitude, selected_location_longitude = city_coordinates
         city_display_name = selected_city_name
@@ -3612,6 +4553,29 @@ if workspace_section in ("Detect", "Chatbot"):
         st.success(tr("Regional SMS preferences saved."))
         st.rerun()
 
+  broadcast_consent = load_broadcast_consent(user_id)
+  with st.expander(tr("Extension broadcast preferences")):
+    st.caption(tr("These separate preferences control general extension SMS and WhatsApp advisories. They are independent of disease-outbreak warning opt-in."))
+    with st.form("extension_broadcast_consent_form"):
+      broadcast_location = st.text_input(
+          tr("Town or district for extension broadcasts"),
+          value=broadcast_consent["location_name"] or selected_city_name,
+          max_chars=120,
+      )
+      broadcast_sms_opt_in = st.checkbox(
+          tr("Allow extension broadcast SMS"), value=broadcast_consent["sms_opt_in"]
+      )
+      broadcast_whatsapp_opt_in = st.checkbox(
+          tr("Allow extension broadcast WhatsApp"), value=broadcast_consent["whatsapp_opt_in"]
+      )
+      save_broadcast_preferences = st.form_submit_button(tr("Save extension broadcast preferences"), type="primary")
+    if save_broadcast_preferences:
+      if save_broadcast_consent(user_id, broadcast_location, broadcast_sms_opt_in, broadcast_whatsapp_opt_in):
+        st.success(tr("Extension broadcast preferences saved. You can opt out at any time here."))
+        st.rerun()
+      else:
+        st.error(tr("Enter a town or district to enable broadcasts."))
+
   farmer_cases = load_diagnoses_from_db(user_id)
   farmer_total = len(farmer_cases)
   farmer_active = sum(
@@ -3663,7 +4627,7 @@ if workspace_section in ("Detect", "Chatbot"):
 
   with col_in2:
     st.subheader(tr("🎤 Voice question and transcription"))
-    st.write(tr("Record a voice question in Amharic or English."))
+    st.caption(tr("Speak in Amharic or English. The transcript stays in the original language; review and edit it before submitting."))
 
     if "reset_audio" not in st.session_state:
       st.session_state["reset_audio"] = False
@@ -3698,6 +4662,7 @@ if workspace_section in ("Detect", "Chatbot"):
               transcription = transcribe_audio_exact(audio_bytes, audio_mime_type)
               st.session_state["transcription"] = transcription["transcription"]
               st.session_state["transcription_language"] = transcription["language"]
+              st.session_state["transcription_uncertain_spans"] = transcription["uncertain_spans"]
             except Exception as error:
               st.session_state["transcription_error"] = gemini_error_message(error)
         else:
@@ -3711,6 +4676,11 @@ if workspace_section in ("Detect", "Chatbot"):
         st.caption(tr("Detected speech language: {language}").format(
             language=st.session_state.get("transcription_language", "Unclear")
         ))
+        uncertain_spans = st.session_state.get("transcription_uncertain_spans", [])
+        if uncertain_spans:
+          st.warning(tr("Speech recognition may be uncertain in the marked spans. Check the recording and edit the transcript before sending.") + " " + ", ".join(uncertain_spans))
+        else:
+          st.caption(tr("No uncertain spans were reported. Review the transcript before sending."))
         st.text_area(
             tr("Review or correct the transcript before using it"),
             value=st.session_state["transcription"],
@@ -3725,6 +4695,7 @@ if workspace_section in ("Detect", "Chatbot"):
         if st.button(tr("Clear audio and record again"), type="secondary"):
           st.session_state.pop("transcription", None)
           st.session_state.pop("transcription_language", None)
+          st.session_state.pop("transcription_uncertain_spans", None)
           st.session_state.pop("transcription_error", None)
           st.session_state.pop("transcription_review", None)
           st.session_state.pop("last_audio_fingerprint", None)
@@ -3943,6 +4914,9 @@ if workspace_section in ("Detect", "Chatbot"):
                     current_user_id=user_id,
                     case_ref=saved_to_db,
                     timestamp=current_time_str,
+                    current_point=(report_latitude, report_longitude)
+                    if report_latitude is not None and report_longitude is not None
+                    else None,
                 )
                 case_latitude = report_latitude
                 case_longitude = report_longitude
@@ -3960,10 +4934,18 @@ if workspace_section in ("Detect", "Chatbot"):
                       pathology=alert_metadata["pathology"],
                       disease_status=alert_metadata["status"],
                   )
-                  if sms_dispatch["sent"]:
-                    st.success(tr("Regional warning sent to {count} nearby opted-in farmer(s).").format(count=sms_dispatch["sent"]))
-                  elif sms_dispatch["provider"] == "mock" and sms_dispatch["eligible"]:
-                    st.info(tr("SMS provider is not configured; nearby warnings are in mock mode and no SMS was sent."))
+                  if sms_dispatch["calculated"]:
+                    st.info(
+                        "📲 **የኤስኤምኤስ ቅድመ-ማስጠንቀቂያ አገልግሎት / Regional SMS Alert Service:** "
+                        "🛠️ *በቅርቡ ይጀምራል / Coming Soon* — በ 30-50 ኪ.ሜ ርቀት ውስጥ "
+                        "ወረርሽኝ የማሰስ እና የማስጠንቀቂያ ስሌት በስርዓቱ ውስጥ ተጠናቋል / "
+                        "Nearby farmer opt-ins and Haversine distance checks are calculated; no SMS was sent."
+                    )
+                    st.caption(tr("Eligible nearby opted-in recipients: {count} · Radius: {radius} km").format(
+                        count=sms_dispatch["eligible"], radius=sms_dispatch["radius_km"]
+                    ))
+                  else:
+                    st.warning(tr("Regional SMS proximity could not be calculated because the farm coordinates are unavailable."))
                 except Exception as sms_error:
                   # SMS is a best-effort channel; it must never interrupt diagnosis or Telegram dispatch.
                   print(f"Regional SMS dispatch error: {redact_configured_credentials(sms_error)}")
@@ -4020,6 +5002,7 @@ if workspace_section in ("Detect", "Chatbot"):
         tr("Ask the agricultural assistant by voice (Amharic or English)"),
         key=f"chat_audio_{st.session_state['auth_session_id']}",
     )
+    st.caption(tr("Speak in Amharic or English. The transcript stays in the original language; review and edit it before submitting."))
   if chat_audio_file is not None:
     chat_audio_bytes = chat_audio_file.read()
     if chat_audio_bytes:
@@ -4037,6 +5020,7 @@ if workspace_section in ("Detect", "Chatbot"):
               )
               st.session_state["chat_voice_transcript"] = voice_result["transcription"]
               st.session_state["chat_voice_language"] = voice_result["language"]
+              st.session_state["chat_voice_uncertain_spans"] = voice_result["uncertain_spans"]
             except Exception as error:
               st.session_state["chat_voice_error"] = gemini_error_message(error)
         else:
@@ -4048,6 +5032,11 @@ if workspace_section in ("Detect", "Chatbot"):
         st.caption(tr("Detected speech language: {language}").format(
             language=st.session_state.get("chat_voice_language", "Unclear")
         ))
+        uncertain_spans = st.session_state.get("chat_voice_uncertain_spans", [])
+        if uncertain_spans:
+          st.warning(tr("Speech recognition may be uncertain in the marked spans. Check the recording and edit the transcript before sending.") + " " + ", ".join(uncertain_spans))
+        else:
+          st.caption(tr("No uncertain spans were reported. Review the transcript before sending."))
         st.text_area(
             tr("Review or correct the transcript before sending"),
             value=st.session_state["chat_voice_transcript"],
